@@ -1,0 +1,23 @@
+{
+  "canisters": {
+    "rwa": {
+      "main": "src/SEVRA_backend/main.mo",
+      "type": "motoko"
+    },
+    "SEVRA_frontend": {
+      "dependencies": ["rwa"],
+      "frontend": {
+        "entrypoint": "src/SEVRA_frontend/src/index.html"
+      },
+      "source": ["src/SEVRA_frontend/assets", "dist/SEVRA_frontend/"],
+      "type": "assets"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "version": 1
+}
