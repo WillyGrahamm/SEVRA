@@ -66,7 +66,7 @@ cd SEVRA/
 Install dependencies:
 
 ```bash
-npm install
+npm ci
 ```
 
 Jalankan perintah berikut untuk memulai:
@@ -107,7 +107,7 @@ cd src/SEVRA_frontend/
 Install & Jalankan development server:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
