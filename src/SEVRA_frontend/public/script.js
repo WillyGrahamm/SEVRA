@@ -1,10 +1,35 @@
 document.querySelector('video').playbackRate = 0.7;
 
+//debounce
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+//Thorttle
+function throttle(func, limit) {
+    let inThrottle;
+    return function(...args) {
+        if (!inThrottle) {
+            func.apply(this, args);
+            inThrottle = true;
+            setTimeout(() => inThrottle = false, limit);
+        }
+    };
+}
+
 //Scrolling Javascript Logic
 let isScrolling = false;
 const contentGroups = document.querySelectorAll('.First-Content-group, .Second-Content-group, .Third-Content-group, .Fourth-Content-group');
 
-window.addEventListener('wheel', (e) => {
+window.addEventListener('wheel', throttle((e) => {
     if (isScrolling) return;
 
     e.preventDefault();
@@ -34,38 +59,35 @@ window.addEventListener('wheel', (e) => {
     } else {
         isScrolling = false;
     }
-}, { passive: false });
+}, { passive: false }));
 
 // Typewriter effect function
 function typeWriter(element, text, delay = 30, callback) {
     element.style.opacity = '0';
     element.innerHTML = '';
     let index = 0;
-    
+
     setTimeout(() => {
         element.style.opacity = '1';
         element.classList.add('typing-effect');
 
-        const interval = setInterval(() => {
+        function typeNextChar(timestamp) {
             if (index < text.length) {
                 const char = text.charAt(index);
                 const span = document.createElement('span');
                 span.textContent = char;
                 span.classList.add('typing-animation');
                 element.appendChild(span);
-                
-                // Remove animation class after it completes
-                setTimeout(() => {
-                    span.classList.remove('typing-animation');
-                }, 200);
-                
+
+                setTimeout(() => span.classList.remove('typing-animation'), 200);
                 index++;
+                requestAnimationFrame(typeNextChar);
             } else {
-                clearInterval(interval);
                 element.classList.remove('typing-effect');
                 if (callback) callback();
             }
-        }, delay);
+        }
+        requestAnimationFrame(typeNextChar);
     }, delay);
 }
 
@@ -186,23 +208,33 @@ function updateContent(direction) {
     }, 300);
 }
 
-thirdContentGroup.addEventListener('mousemove', (e) => {
+thirdContentGroup.addEventListener('mousemove', throttle((e) => {
     if (!centerSquare || !sectionNumber) return;
 
     const rect = thirdContentGroup.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
-    const rotateY = ((e.clientX - centerX) / (rect.width / 2)) * 5; 
-    const rotateX = ((e.clientY - centerY) / (rect.height / 2)) * -5; 
+    const rotateY = ((e.clientX - centerX) / (rect.width / 2)) * 10; 
+    const rotateX = ((e.clientY - centerY) / (rect.height / 2)) * -10; 
+
+    const distanceX = Math.abs(e.clientX - centerX) / (rect.width / 2);
+    const distanceY = Math.abs(e.clientY - centerY) / (rect.height / 2);
+    const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+    const scale = 1 + (1 - distance) * 0.05;
+
+    const shadowX = (e.clientX - centerX) / 20;
+    const shadowY = (e.clientY - centerY) / 20;
 
     if (isMouseNearBox(e, centerSquare, proximityThreshold)) {
         centerSquare.classList.add('moving');
         centerSquare.style.setProperty('--rotate-y', `${rotateY}deg`);
         centerSquare.style.setProperty('--rotate-x', `${rotateX}deg`);
+        centerSquare.style.transform = `perspective(1000px) rotateY(${rotateY}deg) rotateX(${rotateX}deg) scale(${scale})`;
+        centerSquare.style.boxShadow = `${shadowX}px ${shadowY}px 20px rgba(0, 255, 255, 0.5)`;
     } else {
         centerSquare.classList.remove('moving');
-        centerSquare.style.setProperty('--rotate-y', '0deg');
-        centerSquare.style.setProperty('--rotate-x', '0deg');
+        centerSquare.style.transform = 'perspective(1000px) rotateY(0deg) rotateX(0deg) scale(1)';
+        centerSquare.style.boxShadow = '0 0 20px rgba(0, 255, 255, 0.3)';
     }
 
     if (sectionNumber.classList.contains('active')) {
@@ -210,7 +242,7 @@ thirdContentGroup.addEventListener('mousemove', (e) => {
         sectionNumber.style.setProperty('--rotate-y', `${rotateY}deg`);
         sectionNumber.style.setProperty('--rotate-x', `${rotateX}deg`);
     }
-});
+}));
 
 thirdContentGroup.addEventListener('mouseleave', () => {
     if (centerSquare) {
@@ -224,6 +256,24 @@ thirdContentGroup.addEventListener('mouseleave', () => {
         sectionNumber.style.setProperty('--rotate-x', '0deg');
     }
 });
+
+// When the mouse is near the square for container 3
+function isMouseNearBox(event, element, threshold) {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const mouseX = event.clientX;
+    const mouseY = event.clientY;
+    const nearLeft = rect.left - threshold;
+    const nearRight = rect.right + threshold;
+    const nearTop = rect.top - threshold;
+    const nearBottom = rect.bottom + threshold;
+    return (
+        mouseX >= nearLeft &&
+        mouseX <= nearRight &&
+        mouseY >= nearTop &&
+        mouseY <= nearBottom
+    );
+}
 
 // Fourth Content Function (Call Typewriter Func)
 const endDescriptions = document.querySelectorAll('.End_Description');
@@ -263,42 +313,16 @@ document.addEventListener('DOMContentLoaded', function() {
     // Calling the UNOWNABLE Text function above
     typeWriteUnownable(2000, 500);
 
-    // Second Container Group's Animation and Observer
-    const Second_observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                entry.target.classList.add('animate');
-                if (entry.target.classList.contains('Second-Content-Title')) {
-                    const title = entry.target;
-                    title.innerHTML = '';
-                    typeWriter(title, "Timeless Masterpieces, Redefined by Ownership.", 50, () => {
-                        setTimeout(() => {
-                            document.querySelectorAll('.square').forEach(square => {
-                                square.classList.add('animate');
-                            });
-                        }, 1000); 
-                    });
-                    Second_observer.unobserve(title);
-                } else {
-                    entry.target.classList.add('animate');
-                }
-            } else {
-                // When the element leaves view, reset animations
-                entry.target.classList.remove('animate');
-                if (!entry.target.classList.contains('Second-Content-Title')) {
-                    entry.target.classList.remove('animate');
-                }
-            }
-        });
-    }, { threshold: 0.5 });
-
-    // Observe both the title and squares
-    const Second_title = document.querySelector('.Second-Content-Title');
+    // Square interactive hover
     const squares = document.querySelectorAll('.square');
-    
-    Second_observer.observe(Second_title);
-    squares.forEach(square => {
-        Second_observer.observe(square);
+    squares.forEach((square, index) => {
+        square.addEventListener('mouseenter', () => {
+            square.style.boxShadow = '0 0 30px rgba(0, 255, 255, 0.6)';
+        });
+        
+        square.addEventListener('mouseleave', () => {
+            square.style.boxShadow = '';
+        });
     });
 
     // Content 3's caller
@@ -309,6 +333,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     prevBtn.addEventListener('click', () => updateContent('prev'));
     nextBtn.addEventListener('click', () => updateContent('next'));
+    // Reset rotation
+    document.querySelector('.Third-Content-group').addEventListener('mouseleave', () => {
+        if (!centerSquare) return;
+        centerSquare.classList.remove('moving');
+    });
 
     contentGroups.forEach((group, index) => {
         const number = document.createElement('div');
@@ -327,85 +356,40 @@ document.addEventListener('DOMContentLoaded', function() {
         observer.observe(group);
     });
 
-    // Fourth Content Effect Functionality
-    // Trigger TypeWriting Effect in Fouth Content when Fourth-Content-group is in view
-    const fourthContent = document.querySelector('.Fourth-Content-group');
-    const Fourth_observer = new IntersectionObserver((entries) => {
+    document.querySelectorAll('video').forEach(video => {
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    video.play();
+                    observer.unobserve(video);
+                }
+            });
+        }, { threshold: 0.1 });
+        observer.observe(video);
+    });
+
+    const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
-                typeEndDescriptions(); 
-                Fourth_observer.unobserve(fourthContent);
+                if (entry.target.classList.contains('Second-Content-Title')) {
+                    entry.target.classList.add('animate');
+                    typeWriter(entry.target, "Timeless Masterpieces, Redefined by Ownership.", 50);
+                } else if (entry.target.classList.contains('Fourth-Content-group')) {
+                    typeEndDescriptions();
+                } else if (entry.target.classList.contains('square')) {
+                    entry.target.classList.add('animate');
+                }
+            } else if (entry.target.classList.contains('Fourth-Content-group')) {
+                endDescriptions.forEach((desc) => {
+                    desc.innerHTML = '';
+                    desc.style.opacity = '0';
+                });
             }
         });
     }, { threshold: 0.5 });
-    Fourth_observer.observe(fourthContent);
     
-    // Observe elements
-    document.querySelectorAll('.Second-Content-Title, .square').forEach(el => {
-        Second_observer.observe(el);
-    });
-});
-
-// When the mouse is near the square for container 3
-function isMouseNearBox(event, element, threshold) {
-    if (!element) return false;
-    const rect = element.getBoundingClientRect();
-    const mouseX = event.clientX;
-    const mouseY = event.clientY;
-    const nearLeft = rect.left - threshold;
-    const nearRight = rect.right + threshold;
-    const nearTop = rect.top - threshold;
-    const nearBottom = rect.bottom + threshold;
-    return (
-        mouseX >= nearLeft &&
-        mouseX <= nearRight &&
-        mouseY >= nearTop &&
-        mouseY <= nearBottom
-    );
-}
-
-// Reset rotation when mouse leaves
-document.querySelector('.Third-Content-group').addEventListener('mouseleave', () => {
-    if (!centerSquare) return;
-    centerSquare.classList.remove('moving');
-});
-
-// Fix for the "Sevra. Miliki warisan, kendalikan nilai." text placement
-document.addEventListener('DOMContentLoaded', function() {
-    // Add background section numbers
-    const contentGroups = document.querySelectorAll('.First-Content-group, .Second-Content-group, .Third-Content-group, .Fourth-Content-group');
-    contentGroups.forEach((group, index) => {
-        const number = document.createElement('div');
-        number.className = 'section-number';
-        number.textContent = (index + 1).toString();
-        number.style.opacity = '0';
-        group.appendChild(number);
-        
-        // Animate number when section comes into view
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    number.style.opacity = '0.05';
-                    number.style.animation = 'numberAppear 1s forwards';
-                }
-            });
-        }, { threshold: 0.3 });
-        
-        observer.observe(group);
-    });
-    
-    // Enhanced square hover effects
-    const squares = document.querySelectorAll('.square');
-    squares.forEach((square, index) => {
-        square.addEventListener('mouseenter', () => {
-            // Add glowing effect to the corresponding image
-            square.style.boxShadow = '0 0 30px rgba(0, 255, 255, 0.6)';
-        });
-        
-        square.addEventListener('mouseleave', () => {
-            // Remove glowing effect
-            square.style.boxShadow = '';
-        });
+    document.querySelectorAll('.Second-Content-Title, .Fourth-Content-group, .square').forEach(el => {
+        observer.observe(el);
     });
 });
 

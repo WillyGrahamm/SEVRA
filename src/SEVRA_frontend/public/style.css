@@ -245,7 +245,7 @@ video {
     text-align: center;
     font-size: 2em; 
     margin-bottom: 30px;
-    top: 25vh;
+    top: 20vh;
     left: 50%;
     transform: translate(-50%, -50%) scale(1.2);
     z-index: 3;
@@ -456,8 +456,8 @@ video {
 
 /* 3D Effect.. */
 .center-square.moving {
-    transition: transform 0.3s ease-out; 
-    transform: perspective(1000px) rotateY(var(--rotate-y)) rotateX(var(--rotate-x));
+    transition: transform 0.3s ease-out, box-shadow 0.3s ease-out;
+    box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
 }
 .third-section-number {
     position: absolute;

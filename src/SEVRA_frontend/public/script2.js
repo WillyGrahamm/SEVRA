@@ -1,44 +1,34 @@
 // Create binary code background
 function createBinaryBackground() {
-    const aiChatSection = document.querySelector('.ai-chat');
-    
-    const binaryBackground = document.createElement('div');
+    const binaryBackground = document.querySelector('.binary-background') || document.createElement('div');
     binaryBackground.className = 'binary-background';
-    aiChatSection.appendChild(binaryBackground);
-    
-    const generateBinaryElements = () => {
-    const characters = ['0', '1'];
-    const numberOfElements = 50;
-    
-    binaryBackground.innerHTML = '';
-    
-    for (let i = 0; i < numberOfElements; i++) {
-        const binaryElement = document.createElement('div');
-        binaryElement.className = 'binary-element';
-        
-        // Random position
-        binaryElement.style.left = `${Math.random() * 100}%`;
-        binaryElement.style.top = `${Math.random() * 100}%`;
-        
-        // Random size
-        const size = Math.floor(Math.random() * 20) + 10;
-        binaryElement.style.fontSize = `${size}px`;
-        
-        // Random character
-        binaryElement.textContent = characters[Math.floor(Math.random() * characters.length)];
-        
-        // Random opacity
-        binaryElement.style.opacity = Math.random() * 0.5 + 0.1;
-        
-        binaryBackground.appendChild(binaryElement);
+    if (!binaryBackground.parentElement) {
+        document.querySelector('.ai-chat').appendChild(binaryBackground);
     }
-    };
-    
-    generateBinaryElements();
-    
+
+    if (!binaryBackground.children.length) {
+        const characters = ['0', '1'];
+        const numberOfElements = 50;
+
+        for (let i = 0; i < numberOfElements; i++) {
+            const binaryElement = document.createElement('div');
+            binaryElement.className = 'binary-element';
+            binaryElement.style.left = `${Math.random() * 100}%`;
+            binaryElement.style.top = `${Math.random() * 100}%`;
+            binaryElement.style.fontSize = `${Math.floor(Math.random() * 20) + 10}px`;
+            binaryElement.textContent = characters[Math.floor(Math.random() * 2)];
+            binaryBackground.appendChild(binaryElement);
+        }
+    }
+
     return {
-    element: binaryBackground,
-    updateBinary: generateBinaryElements
+        element: binaryBackground,
+        updateBinary: () => {
+            Array.from(binaryBackground.children).forEach(el => {
+                el.style.left = `${Math.random() * 100}%`;
+                el.style.top = `${Math.random() * 100}%`;
+            });
+        }
     };
 }
 
@@ -107,6 +97,50 @@ function typeEndDescriptions(index = 0) {
 
 document.addEventListener('DOMContentLoaded', () => {
     console.log('DOM fully loaded');
+
+    // Cache elements for video backgrounds
+    const introSection = document.querySelector('.introduction');
+    const showcaseSection = document.querySelector('.assets-showcase');
+    const aiSection = document.querySelector('.ai-chat');
+    const footerGroup = document.querySelector('.Footer-group'); 
+
+    const introVideo = introSection.querySelector('.video-container');
+    const showcaseVideo = showcaseSection.querySelector('.video-container');
+    const footerVideo = footerGroup.querySelector('.video-container');
+
+    function setInitialVideoVisibility() {
+        const windowHeight = window.innerHeight;
+        const introRect = introSection.getBoundingClientRect();
+        const showcaseRect = showcaseSection.getBoundingClientRect();
+        const aiRect = aiSection.getBoundingClientRect();
+
+        const sections = [
+            { section: introSection, video: introVideo, rect: introRect },
+            { section: showcaseSection, video: showcaseVideo, rect: showcaseRect },
+            { section: aiSection, video: null, rect: aiRect }, 
+        ];
+
+        let visibleSection = null;
+        sections.forEach(({ section, video, rect }) => {
+            const isVisible = rect.top < windowHeight && rect.bottom > 0; 
+            if (isVisible) {
+                const visibilityRatio = Math.min(rect.bottom, windowHeight) - Math.max(rect.top, 0);
+                if (visibilityRatio > windowHeight * 0.5) { 
+                    visibleSection = { section, video };
+                }
+            }
+        });
+        // set up 1 video to not disappear and that is the viewed one
+        sections.forEach(({ section, video }) => {
+            if (video) {
+                video.style.opacity = (visibleSection && visibleSection.video === video) ? '1' : '0';
+            }
+            section.style.opacity = (visibleSection && visibleSection.section === section) ? '1' : '0';
+        });
+        console.log('Visible section on load:', visibleSection ? visibleSection.section.className : 'None');
+    }
+    setInitialVideoVisibility();
+
     // Container 1: ASSETS text hover effect
     const assetsHover = document.querySelector('.assets-hover');
     // Extended abstract text options
@@ -150,27 +184,50 @@ document.addEventListener('DOMContentLoaded', () => {
         assetsSection.scrollIntoView({ behavior: 'smooth' });
     });
 
-    // Container 2: Scroll Animation
-    const showcaseSection = document.querySelector('.assets-showcase');
+    // Smooth videos' background transition
+    document.addEventListener('scroll', function () {
+        const introRect = introSection.getBoundingClientRect();
+        const showcaseRect = showcaseSection.getBoundingClientRect();
+        const aiRect = aiSection.getBoundingClientRect();
+        const windowHeight = window.innerHeight;
 
-    const originalContent = artworksContainer.innerHTML;
-    artworksContainer.innerHTML += originalContent; 
+        const showcaseTitle = showcaseSection.querySelector('.showcase-title');
 
-    // if viewed it start..
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                artworksContainer.style.animationPlayState = 'running';
-            } else {
-                artworksContainer.style.animationPlayState = 'paused';
-            }
-        });
-    }, {
-        threshold: 0.1 
+        if (introRect.bottom <= windowHeight && introRect.bottom > 0) {
+            introVideo.style.opacity = introRect.bottom / windowHeight;
+            introSection.style.opacity = introRect.bottom / windowHeight;
+        } else if (introRect.bottom <= 0) {
+            introVideo.style.opacity = 0;
+            introSection.style.opacity = 0;
+        } else {
+            introVideo.style.opacity = 1;
+            introSection.style.opacity = 1;
+        }
+    
+        if (showcaseRect.top <= windowHeight && showcaseRect.top > 0) {
+            showcaseVideo.style.opacity = 1 - showcaseRect.top / windowHeight;
+            showcaseSection.style.opacity = 1 - showcaseRect.top / windowHeight;
+        } else if (showcaseRect.top <= 0) {
+            showcaseVideo.style.opacity = 1;
+            showcaseSection.style.opacity = 1;
+        } else {
+            showcaseVideo.style.opacity = 0;
+            showcaseSection.style.opacity = 0;
+            showcaseTitle.style.opacity = 0;
+        }
+
+        if (aiRect.top <= windowHeight && aiRect.top > 0) {
+            aiSection.style.opacity = 1 - aiRect.top / windowHeight;
+        } else if (aiRect.top <= 0) {
+            aiSection.style.opacity = 1;
+        } else {
+            aiSection.style.opacity = 0;
+        }
     });
 
-    observer.observe(showcaseSection);
-
+    // Container 2: Scroll Animation
+    const originalContent = artworksContainer.innerHTML;
+    artworksContainer.innerHTML += originalContent;
     setInterval(resetScroll, 100);
     artworksContainer.style.transition = 'transform 60s linear';
 
@@ -237,6 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Show AI chat interaction
     aiPill.addEventListener('click', () => {
+        console.log('AI Pill clicked');
         aiPill.style.display = 'none';
         aiContent.classList.add('active');
         aiContent.style.opacity = '1';
@@ -313,17 +371,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 2000);
     };
 
-    // Trigger TypeWriting Effect in Footer Content when Footer Group is in view
-    const FooterGroup = document.querySelector('.Footer-group');
-    const Fourth_observer = new IntersectionObserver((entries) => {
+    // Observer for both container 2 and footer container
+    const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
-                typeEndDescriptions(); 
-                Fourth_observer.unobserve(FooterGroup);
+                if (entry.target === showcaseSection) {
+                    console.log('Showcase section in view');
+                    artworksContainer.style.animationPlayState = 'running';
+                } else if (entry.target === footerGroup) {
+                    console.log('Footer group in view');
+                    typeEndDescriptions();
+                    observer.unobserve(footerGroup);
+                }
+            } else if (entry.target === showcaseSection) {
+                artworksContainer.style.animationPlayState = 'paused';
             }
         });
-    }, { threshold: 0.5 });
-    Fourth_observer.observe(FooterGroup);
+    }, {
+        threshold: [0.1, 0.5]
+    });
+    observer.observe(showcaseSection);
+    observer.observe(footerGroup);
 
     // Smooth Scroll for Navbar
     document.querySelectorAll('.nav-button').forEach(button => {

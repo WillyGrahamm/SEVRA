@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { signInWithPopup, onAuthStateChanged } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
 import { Buffer } from "buffer";
@@ -14,6 +14,8 @@ import { configureChains, createConfig, WagmiConfig } from 'wagmi';
 import { mainnet, sepolia } from 'wagmi/chains';
 import { PieChart } from 'react-minimal-pie-chart';
 import './styles3.css';
+import { useWeb3Modal } from '@web3modal/react';
+import { useAccount } from 'wagmi';
 
 window.Buffer = Buffer;
 
@@ -22,16 +24,16 @@ const videoMap = {
   'ORY': 'Videos/ORY.mp4',
   'BDO': 'Videos/BDO.mp4',
   'POL': 'Videos/POL.mp4',
-  'LFA': 'Videos/LFA.mp4'
+  'LFA': 'Videos/LFA.mp4',
 };
 
 const projectId = '91998171939137f7f0fdc439ed1effac';
 const chains = [mainnet, sepolia];
 const { publicClient } = configureChains(chains, [w3mProvider({ projectId })]);
 const wagmiConfig = createConfig({
-  autoConnect: true,
+  autoConnect: false, // Pastikan autoConnect dimatikan untuk menghindari konflik
   connectors: w3mConnectors({ projectId, chains }),
-  publicClient
+  publicClient,
 });
 const ethereumClient = new EthereumClient(wagmiConfig, chains);
 
@@ -40,12 +42,39 @@ export default function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   useEffect(() => {
+    // Periksa apakah window.ethereum sudah ada dengan aman
+    if (typeof window !== 'undefined' && window.ethereum) {
+      console.log("Ethereum provider detected:", window.ethereum);
+      
+      // Tambahkan event listener tanpa mencoba mendefinisikan ulang window.ethereum
+      const handleConnect = () => console.log('Wallet connected');
+      const handleDisconnect = () => {
+        console.log('Wallet disconnected');
+        setUser(null);
+        localStorage.removeItem('firebaseUser');
+        setRefreshTrigger(prev => prev + 1);
+      };
+  
+      window.ethereum.on('connect', handleConnect);
+      window.ethereum.on('disconnect', handleDisconnect);
+  
+      // Bersihkan listener saat komponen unmount
+      return () => {
+        window.ethereum.removeListener('connect', handleConnect);
+        window.ethereum.removeListener('disconnect', handleDisconnect);
+      };
+    } else {
+      console.log("No Ethereum provider detected.");
+    }
+  }, []);
+
+  useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         setUser(firebaseUser);
         localStorage.setItem('firebaseUser', JSON.stringify(firebaseUser));
         try {
-          const initResult = await backend.initializeUser(firebaseUser.uid);
+          await backend.initializeUser(firebaseUser.uid);
           setRefreshTrigger(prev => prev + 1);
         } catch (error) {
           console.error("Failed to initialize user:", error);
@@ -53,32 +82,21 @@ export default function App() {
       } else {
         const storedUser = localStorage.getItem('firebaseUser');
         if (storedUser) setUser(JSON.parse(storedUser));
+        else {
+          setUser(null);
+          localStorage.removeItem('firebaseUser');
+        }
       }
     });
-
-    const particlesScript = document.createElement('script');
-    particlesScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js';
-    particlesScript.async = true;
-    document.body.appendChild(particlesScript);
-
-    const script = document.createElement('script');
-    script.src = 'script3.js';
-    script.defer = true;
-    document.body.appendChild(script);
-
-    return () => {
-      unsubscribe();
-      document.body.removeChild(script);
-      document.body.removeChild(particlesScript);
-    };
+    return () => unsubscribe();
   }, []);
 
   const signInWithGoogle = async () => {
     try {
       const result = await signInWithPopup(auth, googleProvider);
       setUser(result.user);
-      localStorage.setItem("firebaseUser", JSON.stringify(result.user));
-      const initResult = await backend.initializeUser(result.user.uid);
+      localStorage.setItem('firebaseUser', JSON.stringify(result.user));
+      await backend.initializeUser(result.user.uid);
       setRefreshTrigger(prev => prev + 1);
     } catch (error) {
       console.error("Error signing in with Google:", error);
@@ -88,7 +106,12 @@ export default function App() {
   return (
     <>
       <WagmiConfig config={wagmiConfig}>
-        <SevraApp user={user} signInWithGoogle={signInWithGoogle} refreshTrigger={refreshTrigger} setRefreshTrigger={setRefreshTrigger} />
+        <SevraApp
+          user={user}
+          signInWithGoogle={signInWithGoogle}
+          refreshTrigger={refreshTrigger}
+          setRefreshTrigger={setRefreshTrigger}
+        />
       </WagmiConfig>
       <Web3Modal projectId={projectId} ethereumClient={ethereumClient} />
     </>
@@ -114,41 +137,114 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
   const [notifications, setNotifications] = useState([]);
   const [showPopup, setShowPopup] = useState(false);
   const [popupMessage, setPopupMessage] = useState('');
+  const [tooltipData, setTooltipData] = useState({ visible: false, title: '', percentage: 0, x: 0, y: 0 });
+  const [lastInteraction, setLastInteraction] = useState(Date.now());
+  const videoRef = useRef(null);
 
-  const addNotification = (message) => {
-    setNotifications(prev => [...prev, { id: Date.now(), message }]);
-    setPopupMessage(message);
-    setShowPopup(true);
+  // Efek untuk mouse follower
+  useEffect(() => {
+    const follower = document.getElementById('mouse-follower');
+    const moveFollower = (e) => {
+      follower.style.left = `${e.clientX}px`;
+      follower.style.top = `${e.clientY}px`;
+      follower.style.opacity = '1';
+    };
+    document.addEventListener('mousemove', moveFollower);
+    return () => document.removeEventListener('mousemove', moveFollower);
+  }, []);
+
+  // Efek untuk video autoplay
+  useEffect(() => {
+    const handleVideoPlay = () => {
+      if (videoRef.current) {
+        videoRef.current.play().catch(error => console.error("Autoplay failed:", error));
+      }
+    };
+    handleVideoPlay();
+    const interval = setInterval(handleVideoPlay, 1000);
+    return () => clearInterval(interval);
+  }, [activeContainer]);
+
+  // Efek untuk background video container1
+  useEffect(() => {
+    const video = document.querySelector('.container1-bg-video');
+    if (video) {
+      video.play().catch(error => console.error("Autoplay failed:", error));
+    }
+  }, []);
+
+  // Fungsi untuk memformat angka
+  const formatNumber = (num, isMarketContent = false) => {
+    if (num === undefined || num === null || isNaN(num)) return "0.0";
+    if (num === 0) return "0.0";
+    let formatted = num;
+    if (isMarketContent && Math.abs(num) < 1 && num !== 0) {
+      formatted = Number(num.toFixed(4));
+    } else {
+      formatted = Math.round(num * 10) / 10;
+    }
+    const strNum = formatted.toString();
+    if (strNum.includes('.')) {
+      const decimalPart = strNum.split('.')[1];
+      if (decimalPart && parseInt(decimalPart) !== 0) {
+        return Number(formatted.toFixed(decimalPart.length + 1)).toString();
+      }
+    }
+    return formatted.toFixed(1);
   };
 
-  const formatNumber = (num) => {
-    if (num === undefined || num === null) return "0";
-    if (num === 0) return "0";
-    const str = num.toString();
-    const decimalIndex = str.indexOf('.');
-    if (decimalIndex === -1) return str;
-    const integerPart = str.substring(0, decimalIndex);
-    const decimalPart = str.substring(decimalIndex + 1);
-    const trimmedDecimal = decimalPart.replace(/0+$/, '');
-    return trimmedDecimal === '' ? integerPart : `${integerPart}.${trimmedDecimal}`;
-  };
-
+  // Fungsi untuk fetch staged orders
   const fetchStagedOrders = async () => {
     if (!user) return;
     try {
       const stagedOrdersData = {};
       for (const artwork of artworks) {
         const stagedOrder = await backend.getStagedOrders(user.uid, artwork.id);
-        if (stagedOrder && typeof stagedOrder === 'object' && !Array.isArray(stagedOrder) && 'nextStageTime' in stagedOrder) {
-          stagedOrdersData[artwork.id] = stagedOrder;
-        } else {
-          stagedOrdersData[artwork.id] = null;
-        }
+        stagedOrdersData[artwork.id] = stagedOrder && 'nextStageTime' in stagedOrder ? stagedOrder : null;
       }
       setStagedOrders(stagedOrdersData);
+
+      const activeArtworkId = transactionDetails.artworkId || artworks[0]?.id || "UTD";
+      let orderBookData = await backend.getOrderBook(activeArtworkId);
+      orderBookData = normalizeData(orderBookData) || [];
+      const processedOrderBook = { buyOrders: [], sellOrders: [] };
+      if (Array.isArray(orderBookData)) {
+        orderBookData.forEach(order => {
+          const normalizedOrder = {
+            id: order.id || '',
+            user: order.user || '',
+            artworkId: order.artworkId || '',
+            amount: Number(order.amount || 0),
+            price: Number(order.price || 0),
+            timestamp: Number(order.timestamp || 0),
+            status: order.status || 'Open',
+            filledAmount: Number(order.filledAmount || 0),
+          };
+          if (order.orderType?.Buy) processedOrderBook.buyOrders.push(normalizedOrder);
+          else if (order.orderType?.Sell) processedOrderBook.sellOrders.push(normalizedOrder);
+        });
+      }
+      Object.values(stagedOrdersData).forEach(staged => {
+        if (staged && staged.artworkId === activeArtworkId && staged.remainingAmount > 0) {
+          const stagedOrderEntry = {
+            id: `${staged.user || ''}-${staged.artworkId || ''}-${staged.stage || 0}`,
+            user: staged.user || '',
+            artworkId: staged.artworkId || '',
+            amount: Number(staged.stageAmount || 0),
+            price: Number(staged.price || 0),
+            timestamp: Number(staged.nextStageTime || 0),
+            status: 'Open',
+            filledAmount: 0,
+          };
+          if (staged.orderType?.Buy) processedOrderBook.buyOrders.push(stagedOrderEntry);
+          else if (staged.orderType?.Sell) processedOrderBook.sellOrders.push(stagedOrderEntry);
+        }
+      });
+      setOrderBook(processedOrderBook);
     } catch (error) {
       console.error("Error fetching staged orders:", error);
       setStagedOrders({});
+      setOrderBook({ buyOrders: [], sellOrders: [] });
     }
   };
 
@@ -158,6 +254,7 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
     return () => clearInterval(interval);
   }, [artworks, user]);
 
+  // Fungsi untuk normalisasi data
   const normalizeData = (data) => {
     if (data === null || data === undefined) return { sevBalance: 0, usdtBalance: 0, artTokens: [] };
     if (Array.isArray(data)) {
@@ -181,15 +278,13 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
     return data;
   };
 
+  // Fungsi untuk fetch user data
   const fetchUserData = async () => {
     if (!user) return;
     try {
       let userData = await backend.getUserBalance(user.uid);
-      if (!userData) {
-        await initializeUserData();
-        userData = await backend.getUserBalance(user.uid);
-      }
-      const normalizedData = normalizeData(userData);
+      userData = normalizeData(userData) || { usdtBalance: 0, sevBalance: 0, artTokens: [], orders: [] };
+      const normalizedData = userData;
       const userObject = Array.isArray(normalizedData) ? normalizedData[0] : normalizedData;
       const newBalance = {
         sevBalance: userObject.sevBalance !== undefined ? Number(userObject.sevBalance) : 0,
@@ -210,6 +305,7 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
     }
   };
 
+  // Fungsi untuk inisialisasi user data
   const initializeUserData = async () => {
     if (!user) return;
     try {
@@ -225,16 +321,7 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
     if (user && !isInitialized) initializeUserData();
   }, [user]);
 
-  useEffect(() => {
-    if (user) {
-      fetchUserData();
-      fetchData();
-      if (isConnected && activeContainer !== 'container2') setActiveContainer('container2');
-    } else if (activeContainer !== 'container1') {
-      setActiveContainer('container1');
-    }
-  }, [user, isConnected, address, refreshTrigger]);
-
+  // Fungsi untuk fetch trading window
   const fetchTradingWindow = async () => {
     try {
       let windowStatus = await backend.getTradingWindowStatus();
@@ -242,7 +329,7 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
       setTradingWindow({
         isOpen: windowStatus.isOpen || false,
         currentWindow: Array.isArray(windowStatus.currentWindow) && windowStatus.currentWindow.length === 2 ? windowStatus.currentWindow : null,
-        nextWindow: Array.isArray(windowStatus.nextWindow) && windowStatus.nextWindow.length >= 1 ? windowStatus.nextWindow : null
+        nextWindow: Array.isArray(windowStatus.nextWindow) && windowStatus.nextWindow.length >= 1 ? windowStatus.nextWindow : null,
       });
     } catch (error) {
       console.error("Error fetching trading window:", error);
@@ -250,53 +337,96 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
     }
   };
 
+  // Fungsi untuk fetch semua data
   const fetchData = async () => {
     if (!user) return;
     try {
       let result = await backend.getArtworks();
-      result = normalizeData(result);
+      result = normalizeData(result) || [];
       setArtworks(Array.isArray(result) ? result : []);
+
       await fetchTradingWindow();
       await fetchUserData();
+
       const activeArtworkId = transactionDetails.artworkId || (result[0]?.id || "UTD");
       let orderBookData = await backend.getOrderBook(activeArtworkId);
-      orderBookData = normalizeData(orderBookData);
-      const processedOrderBook = Array.isArray(orderBookData) ? orderBookData.reduce((acc, order) => {
-        const normalizedOrder = {
-          id: order.id,
-          user: order.user,
-          artworkId: order.artworkId,
-          amount: Number(order.amount || 0),
-          price: Number(order.price || 0),
-          timestamp: Number(order.timestamp || 0),
-          status: order.status,
-          filledAmount: Number(order.filledAmount || 0)
-        };
-        if (order.orderType?.Buy) acc.buyOrders.push(normalizedOrder);
-        else if (order.orderType?.Sell) acc.sellOrders.push(normalizedOrder);
-        return acc;
-      }, { buyOrders: [], sellOrders: [] }) : { buyOrders: [], sellOrders: [] };
+      orderBookData = normalizeData(orderBookData) || [];
+      const processedOrderBook = Array.isArray(orderBookData)
+        ? orderBookData.reduce(
+            (acc, order) => {
+              if (order.artworkId === activeArtworkId) {
+                const normalizedOrder = {
+                  id: order.id || '',
+                  user: order.user || '',
+                  artworkId: order.artworkId || '',
+                  amount: Number(order.amount || 0),
+                  price: Number(order.price || 0),
+                  timestamp: Number(order.timestamp || 0),
+                  status: order.status || 'Open',
+                  filledAmount: Number(order.filledAmount || 0),
+                };
+                if (order.orderType?.Buy) acc.buyOrders.push(normalizedOrder);
+                else if (order.orderType?.Sell) acc.sellOrders.push(normalizedOrder);
+              }
+              return acc;
+            },
+            { buyOrders: [], sellOrders: [] }
+          )
+        : { buyOrders: [], sellOrders: [] };
+
+      for (const artwork of result) {
+        const stagedOrder = await backend.getStagedOrders(user.uid, artwork.id);
+        if (stagedOrder && stagedOrder.artworkId === activeArtworkId && stagedOrder.remainingAmount > 0) {
+          const stagedOrderEntry = {
+            id: `${stagedOrder.user || ''}-${stagedOrder.artworkId || ''}-${stagedOrder.stage || 0}`,
+            user: stagedOrder.user || '',
+            artworkId: stagedOrder.artworkId || '',
+            amount: Number(stagedOrder.stageAmount || 0),
+            price: Number(stagedOrder.price || 0),
+            timestamp: Number(stagedOrder.nextStageTime || 0),
+            status: "Open",
+            filledAmount: 0,
+          };
+          if (stagedOrder.orderType?.Buy) processedOrderBook.buyOrders.push(stagedOrderEntry);
+          else if (stagedOrder.orderType?.Sell) processedOrderBook.sellOrders.push(stagedOrderEntry);
+        }
+      }
       setOrderBook(processedOrderBook);
 
       const tokenomicsData = {};
       const animatedValuesData = {};
       for (const artwork of result) {
         let tokenomicsResult = await backend.getTokenomics(artwork.id);
-        tokenomicsResult = normalizeData(tokenomicsResult);
-        tokenomicsData[artwork.id] = tokenomicsResult || {};
+        tokenomicsResult = normalizeData(tokenomicsResult) || {};
         const totalSupply = Number(artwork.totalSupply || 0);
-        const validateNumber = (value) => isNaN(Number(value)) || value < 0 ? 0 : Number(value);
-        tokenomicsData[artwork.id].allocation = {
-          whale: validateNumber(tokenomicsResult.whale),
-          medium: validateNumber(tokenomicsResult.medium),
-          retail: validateNumber(tokenomicsResult.retail),
-          burned: validateNumber(tokenomicsResult.burned),
-          developer: validateNumber(tokenomicsResult.developer)
+        const circulatingSupply = Number(tokenomicsResult.circulatingSupply || totalSupply / 2);
+        const marketCap = circulatingSupply * Number(artwork.currentPrice || 0);
+
+        tokenomicsData[artwork.id] = {
+          ...tokenomicsResult,
+          circulatingSupply: circulatingSupply,
+          marketCap: marketCap,
+          allocation: {
+            whale: Number(tokenomicsResult.whale || 0),
+            medium: Number(tokenomicsResult.medium || 0),
+            retail: Number(tokenomicsResult.retail || 0),
+            burned: Number(tokenomicsResult.burned || 0),
+            developer: Number(tokenomicsResult.developer || 0),
+          },
         };
+
+        const lastPriceChange = tokenomicsResult.priceChangeHistory && tokenomicsResult.priceChangeHistory.length > 0
+          ? tokenomicsResult.priceChangeHistory[tokenomicsResult.priceChangeHistory.length - 1]
+          : 0;
+
         animatedValuesData[artwork.id] = {
           currentPrice: Number(artwork.currentPrice || 0),
-          marketCap: validateNumber(tokenomicsResult?.marketCap),
-          totalSupply
+          previousPrice: Number(artwork.lastPrice || 0),
+          marketCap: marketCap,
+          previousMarketCap: marketCap,
+          totalSupply: totalSupply,
+          sevRatio: 20,
+          priceChange: lastPriceChange,
         };
       }
       setTokenomics(tokenomicsData);
@@ -306,42 +436,22 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
       setArtworks([]);
       setOrderBook({ buyOrders: [], sellOrders: [] });
       setTokenomics({});
+      setAnimatedValues({});
     }
   };
 
+  // Efek untuk fetch data saat user atau wallet berubah
   useEffect(() => {
-    if (activeContainer === 'container1') {
-      const initParticles = () => {
-        if (window.particlesJS && document.getElementById('particles-js')) {
-          window.particlesJS('particles-js', {
-            particles: {
-              number: { value: 80, density: { enable: true, value_area: 800 } },
-              color: { value: "#00ffff" },
-              shape: { type: "circle" },
-              opacity: { value: 0.5, random: false },
-              size: { value: 3, random: true },
-              line_linked: { enable: true, distance: 150, color: "#00ffff", opacity: 0.4, width: 1 },
-              move: { enable: true, speed: 2, direction: "none", random: false, straight: false, out_mode: "out", bounce: false }
-            },
-            interactivity: {
-              detect_on: "canvas",
-              events: { onhover: { enable: true, mode: "repulse" }, onclick: { enable: true, mode: "push" } },
-              modes: { repulse: { distance: 100, duration: 0.4 }, push: { particles_nb: 4 } }
-            }
-          });
-        }
-      };
-      if (window.particlesJS) initParticles();
-      else {
-        const checkParticles = setInterval(() => {
-          if (window.particlesJS) {
-            clearInterval(checkParticles);
-            initParticles();
-          }
-        }, 100);
-      }
+    if (user) {
+      fetchData();
+      if (isConnected && activeContainer !== 'container2') setActiveContainer('container2');
+    } else if (activeContainer !== 'container1') {
+      setActiveContainer('container1');
     }
+  }, [user, isConnected, address, refreshTrigger]);
 
+  // Efek untuk update jam
+  useEffect(() => {
     const updateClock = () => {
       const now = new Date();
       const hours = now.getHours() % 12;
@@ -361,42 +471,168 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
     return () => clearInterval(clockInterval);
   }, [activeContainer]);
 
+  // Efek untuk cek idle
   useEffect(() => {
-    const follower = document.getElementById('mouse-follower');
-    const moveFollower = (e) => {
-      follower.style.left = `${e.clientX}px`;
-      follower.style.top = `${e.clientY}px`;
-      follower.style.opacity = '1';
+    const checkIdle = () => {
+      const now = Date.now();
+      if (now - lastInteraction >= 5 * 60 * 1000) {
+        if (activeContainer !== 'container1') {
+          setActiveContainer('container1');
+          if (isConnected) {
+            open();
+            setTimeout(() => {
+              if (!isConnected) {
+                setUser(null);
+                localStorage.removeItem('firebaseUser');
+                setRefreshTrigger(prev => prev + 1);
+              }
+            }, 5000);
+          }
+        }
+      }
     };
-    window.addEventListener('mousemove', moveFollower);
-    return () => window.removeEventListener('mousemove', moveFollower);
-  }, []);
+    const idleInterval = setInterval(checkIdle, 60 * 1000);
+    return () => clearInterval(idleInterval);
+  }, [activeContainer, isConnected, lastInteraction]);
 
+  // Efek untuk handle before unload
   useEffect(() => {
-    if (artworks.length > 0 && !transactionDetails.artworkId) {
-      const maxBuy = balance.sevBalance / (artworks[0].currentPrice || 1);
-      setTransactionDetails(prev => ({
-        ...prev,
-        artworkId: artworks[0].id,
-        price: artworks[0].currentPrice,
-        amount: Math.min(1, maxBuy)
-      }));
-    }
-  }, [artworks, balance]);
+    const handleBeforeUnload = (e) => {
+      if (activeContainer !== 'container1') {
+        e.preventDefault();
+        e.returnValue = '';
+        setActiveContainer('container1');
+        if (isConnected) {
+          open();
+          setUser(null);
+          localStorage.removeItem('firebaseUser');
+        }
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [activeContainer, isConnected]);
 
+  // Efek untuk inisialisasi transactionDetails
+  useEffect(() => {
+    if (selectedMarket && artworks.length > 0) {
+      const artwork = artworks.find(art => art.id === selectedMarket);
+      if (artwork) {
+        const sevRatio = animatedValues[artwork.id]?.sevRatio || 20;
+        const totalSupply = artwork.totalSupply || 1; // Pastikan tidak membagi dengan 0
+        const priceInSev = artwork.currentPrice || 0; // Total valuasi dalam SEV
+        const pricePerSevToken = priceInSev / totalSupply; // Harga per SEV_TOKEN dalam SEV
+        const maxBuyInSev = balance.sevBalance / pricePerSevToken; // Jumlah SEV_TOKEN yang bisa dibeli
+        const maxSell = artTokenBalances[artwork.id] || 0; // Sudah dalam SEV_TOKEN
+        
+        console.log("Slider sync:", { 
+          artworkId: artwork.id, 
+          maxBuy: maxBuyInSev, 
+          maxSell, 
+          sevBalance: balance.sevBalance, 
+          priceInSev, 
+          pricePerSevToken, 
+          sevRatio, 
+          totalSupply 
+        });
+  
+        setTransactionDetails(prev => ({
+          ...prev,
+          artworkId: artwork.id,
+          price: pricePerSevToken, // Simpan harga per SEV_TOKEN dalam SEV
+          amount: Math.min(1, maxSell > 0 ? maxSell : maxBuyInSev), // Default ke 1 atau max yang tersedia
+          isBuying: maxSell === 0, // Jika tidak ada token untuk dijual, default ke beli
+        }));
+      }
+    }
+  }, [selectedMarket, artworks, balance, artTokenBalances, animatedValues]);
+
+  // Efek untuk sinkronkan transactionDetails dengan selectedMarket
+  useEffect(() => {
+    if (selectedMarket && artworks.length > 0) {
+      const artwork = artworks.find(art => art.id === selectedMarket);
+      if (artwork) {
+        const sevRatio = animatedValues[artwork.id]?.sevRatio || 20;
+        const maxSellInSevToken = artTokenBalances[artwork.id] || 0; // Already in SEV_TOKEN
+        const maxBuyInSev = balance.sevBalance / (artwork.currentPrice || 1);
+        const maxBuy = maxBuyInSev / sevRatio; // Convert to SEV_TOKEN
+        setTransactionDetails(prev => ({
+          ...prev,
+          artworkId: artwork.id,
+          price: artwork.currentPrice,
+          amount: maxSellInSevToken > 0 ? 0 : Math.min(1, maxBuy),
+          isBuying: maxSellInSevToken === 0,
+        }));
+      }
+    }
+  }, [selectedMarket, artworks, balance, artTokenBalances]);
+
+  // Efek untuk fluktuasi harga
+  useEffect(() => {
+    const fluctuatePrices = () => {
+      setAnimatedValues(prev => {
+        const newValues = { ...prev };
+        artworks.forEach(artwork => {
+          const currentPrice = newValues[artwork.id]?.currentPrice || artwork.currentPrice || 0;
+          const previousPrice = newValues[artwork.id]?.previousPrice || artwork.currentPrice || 0;
+          const priceChangePercent = previousPrice > 0 ? ((currentPrice - previousPrice) / previousPrice * 100) : 0;
+          let fluctuationRange = 0.005 + (Math.abs(priceChangePercent) > 10 ? 0.015 : 0); // 0.5% - 2%
+          const fluctuation = (Math.random() * 2 - 1) * fluctuationRange;
+          const newPrice = currentPrice * (1 + fluctuation);
+          const newCirculatingSupply = (newValues[artwork.id]?.totalSupply || 0) / 2;
+          const newPriceChange = previousPrice > 0 ? ((newPrice - previousPrice) / previousPrice * 100) : 0;
+
+          newValues[artwork.id] = {
+            ...newValues[artwork.id],
+            previousPrice: currentPrice,
+            currentPrice: newPrice,
+            previousMarketCap: newValues[artwork.id]?.marketCap || 0,
+            marketCap: newCirculatingSupply * newPrice,
+            priceChange: newPriceChange,
+          };
+        });
+        return newValues;
+      });
+    };
+
+    const interval = setInterval(fluctuatePrices, 30_000); // Update setiap 30 detik
+    return () => clearInterval(interval);
+  }, [artworks]);
+
+  // Fungsi untuk menangani order
   const handlePlaceOrder = async (artworkId, amount, price, isBuying = true) => {
     if (!user) return addNotification("Please login first");
     if (!isTradeAllowed()) return addNotification(`Trading closed. Next window: ${tradingWindow?.nextWindow ? formatWindowTime(tradingWindow.nextWindow) : "N/A"}`);
+    if (amount < 1) return addNotification("Minimum transaction is 1 SEV_TOKEN");
+  
+    console.log("Placing order:", { artworkId, amount, price, isBuying, sevBalance: balance.sevBalance, artTokenBalance: artTokenBalances[artworkId] });
+  
     try {
+      const marketContentAmount = amount; // Amount dalam SEV_TOKEN
+      if (marketContentAmount < 0.05) {
+        return addNotification("Minimum transaction in market content is 0.05 SEV_TOKEN");
+      }
+  
       const orderType = isBuying ? { Buy: null } : { Sell: null };
-      const result = await backend.placeOrder(user.uid, artworkId, orderType, amount, price);
+      const result = await backend.placeOrder(user.uid, artworkId, orderType, marketContentAmount, price); // price dalam SEV per SEV_TOKEN
       if (result?.ok) {
         addNotification(`${isBuying ? "Buy" : "Sell"} order placed successfully!`);
-        setTimeout(async () => {
-          await fetchUserData();
-          await fetchData();
-          setRefreshTrigger(prev => prev + 1);
-        }, 500);
+        await fetchData();
+        await fetchStagedOrders();
+        setRefreshTrigger(prev => prev + 1);
+  
+        const marketContent = document.querySelector(`.market-content[data-artwork="${artworkId}"] .market-stats-container`);
+        if (marketContent) {
+          const lineEffect = document.createElement("div");
+          lineEffect.className = `line-effect ${isBuying ? "buy-active" : "sell-active"}`;
+          marketContent.appendChild(lineEffect);
+          setTimeout(() => lineEffect.remove(), 2000);
+        }
+  
+        const stagedOrder = await backend.getStagedOrders(user.uid, artworkId);
+        if (stagedOrder && (stagedOrder.userType === '#Whale' || stagedOrder.userType === '#Medium')) {
+          addNotification(`SEV_${artworkId}: Your ${isBuying ? 'buy' : 'sell'} order will be split because you are a ${stagedOrder.userType === '#Whale' ? 'whale' : 'medium'}. Next phase: ${new Date(stagedOrder.nextStageTime / 1000000).toLocaleString()}`);
+        }
       } else {
         addNotification(`Error: ${result?.err || "Unknown error"}`);
       }
@@ -404,15 +640,6 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
       addNotification(`Error placing order: ${error.message || "Unknown error"}`);
     }
   };
-
-  const NotificationPopup = ({ message, onClose }) => (
-    <div className="popup-overlay">
-      <div className="popup-content">
-        <p>{message}</p>
-        <button className="liquid-button" onClick={onClose}>Close</button>
-      </div>
-    </div>
-  );
 
   const isTradeAllowed = () => tradingWindow?.isOpen || false;
 
@@ -429,63 +656,112 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
     }
   };
 
+  const NotificationPopup = ({ message, onClose }) => {
+    useEffect(() => {
+      const timer = setTimeout(() => {
+        const overlay = document.querySelector('.popup-overlay');
+        if (overlay) {
+          overlay.classList.add('closing');
+          setTimeout(() => onClose(), 500);
+        }
+      }, 4500);
+      return () => clearTimeout(timer);
+    }, [onClose]);
+
+    return (
+      <div className="popup-overlay">
+        <div className="popup-content">
+          <p>{message}</p>
+          <button className="liquid-button" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    );
+  };
+
+  const addNotification = (message) => {
+    setNotifications(prev => [...prev, { id: Date.now(), message, type: 'popup' }]);
+    setPopupMessage(message);
+    setShowPopup(true);
+  };
+
   const handleTopUp = async (amount) => {
-    if (!user) return alert("Please login first!");
+    if (!user) return addNotification("Please login first!");
     const parsedAmount = parseFloat(amount) || 0;
-    if (parsedAmount <= 0) return alert("Please enter a valid amount!");
+    if (parsedAmount <= 0) return addNotification("Please enter a valid amount!");
     try {
       const result = await backend.topUpUSDT(user.uid, parsedAmount);
       if (result?.ok) {
-        alert("Top up successful!");
+        addNotification("Top up successful!");
         setUsdtAmount("");
         setTimeout(async () => {
           await fetchUserData();
           setRefreshTrigger(prev => prev + 1);
         }, 500);
       } else {
-        alert(`Top up failed: ${result?.err || "Unknown error"}`);
+        addNotification(`Top up failed: ${result?.err || "Unknown error"}`);
       }
     } catch (error) {
-      alert(`Top up failed: ${error.message || "Unknown error"}`);
+      addNotification(`Top up failed: ${error.message || "Unknown error"}`);
     }
   };
 
   const handleConvert = async () => {
-    if (!user) return alert("Please login first");
+    if (!user) return addNotification("Please login first");
     const parsedAmount = parseFloat(usdtAmount) || 0;
-    if (parsedAmount <= 0) return alert("Please enter a valid amount");
+    if (parsedAmount <= 0) return addNotification("Please enter a valid amount");
     try {
       const result = await backend.convertUSDTtoSEV(user.uid, parsedAmount);
       if (result?.ok) {
-        alert("Conversion successful!");
+        addNotification("Conversion successful!");
         setUsdtAmount("");
         setTimeout(async () => {
           await fetchUserData();
           setRefreshTrigger(prev => prev + 1);
         }, 500);
       } else {
-        alert(`Error: ${result?.err || "Unknown error"}`);
+        addNotification(`Error: ${result?.err || "Unknown error"}`);
       }
     } catch (error) {
-      alert(`Error: ${error.message || "Unknown error"}`);
+      addNotification(`Error: ${error.message || "Unknown error"}`);
     }
   };
 
   const handleTransactionChange = (e) => {
-    const { name, value } = e.target;
+    const { value } = e.target;
     const newValue = parseFloat(value) || 0;
     const artwork = artworks.find(art => art.id === transactionDetails.artworkId);
-    const scaleFactor = 1000000;
-    const maxBuy = (balance.sevBalance / (artwork?.currentPrice || 1)) * scaleFactor || 1;
-    const maxSell = (artTokenBalances[transactionDetails.artworkId] || 0) * scaleFactor || 0;
-    if (name === 'amount') {
-      const clampedValue = Math.max(-maxSell, Math.min(maxBuy, newValue));
-      setTransactionDetails(prev => ({
-        ...prev,
-        amount: Math.abs(clampedValue) / scaleFactor,
-        isBuying: clampedValue >= 0
-      }));
+    if (!artwork) return;
+
+    const sevRatio = animatedValues[artwork.id]?.sevRatio || 20;
+    const totalSupply = artwork.totalSupply || 1;
+    const priceInSev = artwork.currentPrice || 0;
+    const pricePerSevToken = priceInSev / totalSupply; // Harga per SEV_TOKEN dalam SEV
+    const maxBuyInSev = pricePerSevToken > 0 ? balance.sevBalance / pricePerSevToken : 0; // Jumlah SEV_TOKEN yang bisa dibeli
+    const maxSell = artTokenBalances[artwork.id] || 0; // Sudah dalam SEV_TOKEN
+    const maxAmount = transactionDetails.isBuying ? maxBuyInSev : maxSell;
+
+    const clampedValue = Math.max(0, Math.min(maxAmount, newValue));
+    console.log("Slider change:", { newValue, maxAmount, clampedValue, isBuying: transactionDetails.isBuying });
+
+    setTransactionDetails(prev => ({
+      ...prev,
+      amount: clampedValue,
+    }));
+  };
+
+  const handlePieHover = (event, dataEntry, totalSupply) => {
+    if (!dataEntry) {
+      setTooltipData({ visible: false, title: '', percentage: 0, x: 0, y: 0 });
+      return;
     }
+    const percentage = (dataEntry.value / totalSupply * 100).toFixed(1);
+    setTooltipData({
+      visible: true,
+      title: dataEntry.title,
+      percentage,
+      x: event.clientX,
+      y: event.clientY,
+    });
   };
 
   const switchContainer = (container) => setActiveContainer(container);
@@ -495,16 +771,14 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
     if (contentId && contentId !== selectedMarket) {
       const artwork = artworks.find(art => art.id === contentId);
       if (artwork) {
-        const scaleFactor = 1000000;
-        const maxSell = (artTokenBalances[contentId] || 0) * scaleFactor;
-        const maxBuy = (balance.sevBalance / (artwork.currentPrice || 1)) * scaleFactor;
-        setTransactionDetails(prev => ({
-          ...prev,
-          artworkId: artwork.id,
-          price: artwork.currentPrice,
-          amount: maxSell > 0 ? 0 : Math.min(1, maxBuy) / scaleFactor,
-          isBuying: maxSell === 0
-        }));
+        setTimeout(() => {
+          const header = document.querySelector(`.market-content[data-artwork="${contentId}"] .market-header h3`);
+          if (header) {
+            header.style.animation = 'none';
+            header.offsetHeight;
+            header.style.animation = 'typing 2s steps(40, end), blink-caret 0.75s step-end infinite';
+          }
+        }, 100);
       }
     }
   };
@@ -514,7 +788,7 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
   return (
     <div style={{ backgroundColor: "black" }}>
       <nav className="navbar">
-        <a href="#" className="logo" onClick={() => switchContainer('container1')}>
+        <a href="https://localhost:5173/" className="logo" onClick={() => switchContainer('container1')}>
           <img src="Images/logo2.png" alt="Sevra Logo" />
           <span>SEVRA</span>
         </a>
@@ -530,6 +804,18 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
 
       {activeContainer === 'container1' && (
         <div id="container1">
+          <video
+            ref={videoRef}
+            className="container1-bg-video"
+            autoPlay
+            muted
+            loop
+            playsInline
+            onError={(e) => console.error("Video error:", e)}
+          >
+            <source src="/Videos/asset_web3_3.mp4" type="video/mp4" />
+            Your browser does not support the video tag.
+          </video>
           <div className="overlay"></div>
           <div className="title">SEVRA FINANCE</div>
           <div className="login-panel">
@@ -548,19 +834,15 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
             onClick={() => (user && isConnected ? switchContainer('container2') : null)}
             style={{ cursor: user && isConnected ? 'pointer' : 'not-allowed', opacity: user && isConnected ? 1 : 0.5 }}
           >
-            &#9660;
+            ▼
           </div>
-          <div id="particles-js"></div>
           <div id="mouse-follower"></div>
         </div>
       )}
 
       {activeContainer === 'container2' && (
         <div id="container2">
-          <video className="container2-bg-video" autoPlay muted loop>
-            <source src="/Videos/stock_footer.mp4" type="video/mp4" />
-            Your browser does not support the video tag.
-          </video>
+          <video className="container2-bg-video" autoPlay muted loop></video>
           <div className="dashboard-top">
             <div className="user-data">
               <h2>Your Portfolio</h2>
@@ -572,21 +854,21 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
                 <span>SEV:</span>
                 <span>{formatNumber(balance.sevBalance)} SEV</span>
               </div>
-              {Object.entries(artTokenBalances).map(([artworkId, amount]) => (
+              {Object.entries(artTokenBalances).map(([artworkId, amount]) =>
                 amount !== undefined && (
                   <div className="data-row sub-token" key={artworkId}>
-                    <span>   {`SEV_${artworkId}`}:</span>
+                    <span>{`SEV_${artworkId}`}:</span>
                     <span>
                       {formatNumber(amount)} {`SEV_${artworkId}`}
                       {stagedOrders[artworkId]?.nextStageTime && !isNaN(stagedOrders[artworkId].nextStageTime) && (
                         <span className="staged-notification">
-                          (Your {formatNumber(stagedOrders[artworkId].remainingAmount)} SEV will be added in stages. Stage {stagedOrders[artworkId].stage + 1} on {new Date(stagedOrders[artworkId].nextStageTime / 1000000).toLocaleString()})
+                          (Your {formatNumber(stagedOrders[artworkId].remainingAmount)} SEV will be split because you are a {stagedOrders[artworkId].userType === '#Whale' ? 'whale' : stagedOrders[artworkId].userType === '#Medium' ? 'medium' : 'retail'}. Next phase of {stagedOrders[artworkId].orderType?.Buy ? 'buy' : 'sell'}: {new Date(stagedOrders[artworkId].nextStageTime / 1000000).toLocaleString()})
                         </span>
                       )}
                     </span>
                   </div>
                 )
-              ))}
+              )}
               <div className="data-row">
                 <span>Wallet Address:</span>
                 <span>{isConnected ? `${address.substring(0, 6)}...${address.substring(address.length - 4)}` : 'Not connected'}</span>
@@ -642,7 +924,7 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
                       Convert to SEV
                     </button>
                   </div>
-                  <div className="note">1 SEV = 5 USDT. SEV is used for trading artwork tokens.</div>
+                  <div className="note">1 SEV = 20 USDT. SEV is used for trading artwork tokens.</div>
                 </div>
               )}
             </div>
@@ -659,11 +941,12 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
                   >
                     {artwork.name} - {artwork.symbol}
                   </button>
-                  <div className={`market-content ${selectedMarket === artwork.id ? 'active' : ''}`}>
-                    <video className="market-bg-video" autoPlay muted loop>
+                  <div className={`market-content ${selectedMarket === artwork.id ? 'active' : ''}`} data-artwork={artwork.id}>
+                    <video className="market-bg-video" autoPlay muted loop onError={(e) => console.error(`Failed to load video for ${artwork.id}: ${videoMap[artwork.id]}`)}>
                       <source src={videoMap[artwork.id]} type="video/mp4" />
                       Your browser does not support the video tag.
                     </video>
+                    <div className="market-video-overlay"></div>
                     <div className="market-content-inner">
                       <div className="market-header">
                         <h3>{artwork.name} Market</h3>
@@ -679,24 +962,24 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
                                 duration={1.5}
                                 separator=","
                                 suffix=" SEV"
+                                decimals={1}
                                 useEasing={true}
                               />
                             </span>
                           </div>
                           <div className="stat-item">
                             <span>Price Change:</span>
-                            <span className={Number(artwork.currentPrice) > Number(artwork.lastPrice) ? 'positive' : 'negative'}>
-                              {Number(artwork.currentPrice) > Number(artwork.lastPrice) ? '+' : ''}
-                              {((Number(artwork.currentPrice) - Number(artwork.lastPrice)) / Number(artwork.lastPrice) * 100).toFixed(2)}%
+                            <span className={animatedValues[artwork.id]?.priceChange >= 0 ? 'positive' : 'negative'}>
+                              {formatNumber(animatedValues[artwork.id]?.priceChange || 0, true)}%
                             </span>
                           </div>
                           <div className="stat-item">
                             <span>Total Supply:</span>
-                            <span className="animated-number">{formatNumber(animatedValues[artwork.id]?.totalSupply)}</span>
+                            <span>{formatNumber(animatedValues[artwork.id]?.totalSupply || 0)} SEV</span>
                           </div>
                           <div className="stat-item">
                             <span>Circulating Supply:</span>
-                            <span className="animated-number">{formatNumber(tokenomics[artwork.id]?.circulatingSupply)}</span>
+                            <span>{formatNumber(tokenomics[artwork.id]?.circulatingSupply || 0)} SEV</span>
                           </div>
                           <div className="stat-item">
                             <span>Market Cap:</span>
@@ -707,6 +990,7 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
                                 duration={1.5}
                                 separator=","
                                 suffix=" SEV"
+                                decimals={1}
                                 useEasing={true}
                               />
                             </span>
@@ -715,28 +999,30 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
                         {tokenomics[artwork.id]?.allocation && (
                           <div className="tokenomics-item">
                             <span>Tokenomics Allocation:</span>
-                            {(tokenomics[artwork.id].allocation.whale > 0 ||
-                              tokenomics[artwork.id].allocation.medium > 0 ||
-                              tokenomics[artwork.id].allocation.retail > 0 ||
-                              tokenomics[artwork.id].allocation.burned > 0 ||
-                              tokenomics[artwork.id].allocation.developer > 0) ? (
-                              <PieChart
-                                className="pie-chart"
-                                data={[
-                                  { title: 'Whale', value: Math.max(tokenomics[artwork.id].allocation.whale, 1), color: '#00FFFF' },
-                                  { title: 'Medium', value: Math.max(tokenomics[artwork.id].allocation.medium, 1), color: '#8A2BE2' },
-                                  { title: 'Retail', value: Math.max(tokenomics[artwork.id].allocation.retail, 1), color: '#00FF00' },
-                                  { title: 'Burned', value: Math.max(tokenomics[artwork.id].allocation.burned, 1), color: '#FF0000' },
-                                  { title: 'Developer', value: Math.max(tokenomics[artwork.id].allocation.developer, 1), color: '#FFFF00' },
-                                ].filter(item => item.value > 0)}
-                                style={{ height: '200px' }}
-                                label={({ dataEntry }) => `${dataEntry.title}: ${(dataEntry.value / artwork.totalSupply * 100).toFixed(1)}%`}
-                                labelStyle={{ fontSize: '6px', fill: '#fff', fontFamily: 'EarthOrbiter' }}
-                                labelPosition={112}
-                                lineWidth={15}
-                              />
-                            ) : (
-                              <span>No distribution data available</span>
+                            <PieChart
+                              className="pie-chart"
+                              data={[
+                                tokenomics[artwork.id].allocation.whale > 0 ? { title: 'Whale', value: tokenomics[artwork.id].allocation.whale, color: '#00FFFF' } : null,
+                                tokenomics[artwork.id].allocation.medium > 0 ? { title: 'Medium', value: tokenomics[artwork.id].allocation.medium, color: '#8A2BE2' } : null,
+                                tokenomics[artwork.id].allocation.retail > 0 ? { title: 'Retail', value: tokenomics[artwork.id].allocation.retail, color: '#00FF00' } : null,
+                                tokenomics[artwork.id].allocation.burned > 0 ? { title: 'Burned', value: tokenomics[artwork.id].allocation.burned, color: '#FF0000' } : null,
+                                tokenomics[artwork.id].allocation.developer > 0 ? { title: 'Developer', value: tokenomics[artwork.id].allocation.developer, color: '#FFFF00' } : null,
+                              ].filter(item => item !== null)}
+                              style={{ height: '200px' }}
+                              lineWidth={15}
+                              onMouseOver={(event, dataEntry) => {
+                                const totalSupply = Object.values(tokenomics[artwork.id].allocation).reduce((sum, val) => sum + val, 0);
+                                handlePieHover(event, dataEntry, totalSupply);
+                              }}
+                              onMouseOut={() => handlePieHover(null, null, 0)}
+                            />
+                            {tooltipData.visible && (
+                              <div
+                                className="tooltip"
+                                style={{ left: tooltipData.x + 10, top: tooltipData.y + 10 }}
+                              >
+                                {tooltipData.title}: {tooltipData.percentage}%
+                              </div>
                             )}
                           </div>
                         )}
@@ -745,21 +1031,41 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
                         <div className="order-book-horizontal">
                           <div className="order-column buy-column">
                             <h4>Buy Orders</h4>
-                            {orderBook.buyOrders.map((order, index) => (
+                            {orderBook.buyOrders.slice(0, 2).map((order, index) => (
                               <div key={index} className="order-bar buy-bar">
                                 <div style={{ width: `${(order.amount / artwork.totalSupply) * 100 * 12}%` }}></div>
                                 <span>{formatNumber(order.amount)} @ {formatNumber(order.price)} SEV</span>
                               </div>
                             ))}
+                            {orderBook.buyOrders.length > 2 && (
+                              <div className="order-scroll">
+                                {orderBook.buyOrders.slice(2).map((order, index) => (
+                                  <div key={index + 2} className="order-bar buy-bar">
+                                    <div style={{ width: `${(order.amount / artwork.totalSupply) * 100 * 12}%` }}></div>
+                                    <span>{formatNumber(order.amount)} @ {formatNumber(order.price)} SEV</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           <div className="order-column sell-column">
                             <h4>Sell Orders</h4>
-                            {orderBook.sellOrders.map((order, index) => (
+                            {orderBook.sellOrders.slice(0, 2).map((order, index) => (
                               <div key={index} className="order-bar sell-bar">
                                 <div style={{ width: `${(order.amount / artwork.totalSupply) * 100 * 12}%` }}></div>
                                 <span>{formatNumber(order.amount)} @ {formatNumber(order.price)} SEV</span>
                               </div>
                             ))}
+                            {orderBook.sellOrders.length > 2 && (
+                              <div className="order-scroll">
+                                {orderBook.sellOrders.slice(2).map((order, index) => (
+                                  <div key={index + 2} className="order-bar sell-bar">
+                                    <div style={{ width: `${(order.amount / artwork.totalSupply) * 100 * 12}%` }}></div>
+                                    <span>{formatNumber(order.amount)} @ {formatNumber(order.price)} SEV</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -767,32 +1073,67 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
                         <input
                           type="range"
                           name="amount"
-                          value={transactionDetails.artworkId === artwork.id ? (transactionDetails.amount * (transactionDetails.isBuying ? 1 : -1) * 1000000) : 0}
-                          onChange={handleTransactionChange}
-                          min={-(artTokenBalances[artwork.id] || 0) * 1000000}
-                          max={balance.sevBalance / (artwork.currentPrice || 1) * 1000000}
+                          min="0"
+                          max={
+                            transactionDetails.isBuying
+                              ? Math.max(1, balance.sevBalance / (transactionDetails.price || 1)) // pricePerSevToken dalam SEV
+                              : Math.max(1, artTokenBalances[transactionDetails.artworkId] || 0)
+                          }
                           step="0.01"
+                          value={transactionDetails.amount || 0}
+                          onChange={handleTransactionChange}
                           className="slider"
+                          disabled={!user || !isConnected || !isTradeAllowed()}
                         />
                         <span className="slider-value">
-                          {transactionDetails.isBuying ? 'Buy' : 'Sell'}:
-                          {transactionDetails.artworkId === artwork.id ? transactionDetails.amount : 0} =
-                          {formatNumber((transactionDetails.artworkId === artwork.id ? transactionDetails.amount : 0) * artwork.currentPrice)} SEV
+                          {transactionDetails.isBuying ? 'Buy' : 'Sell'}: {transactionDetails.amount.toFixed(2)} SEV_TOKEN =
+                          {formatNumber(transactionDetails.amount * transactionDetails.price)} SEV Total
                         </span>
                         <div className="trading-buttons">
                           <button
                             className="buy-button"
-                            onClick={() => handlePlaceOrder(artwork.id, transactionDetails.amount, artwork.currentPrice, true)}
-                            disabled={!user || !isConnected || !isTradeAllowed() || transactionDetails.amount <= 0 || !transactionDetails.isBuying}
+                            onClick={() => {
+                              console.log("Attempting to buy:", {
+                                artworkId: transactionDetails.artworkId,
+                                amount: transactionDetails.amount,
+                                price: transactionDetails.price, // Dalam SEV per SEV_TOKEN
+                                totalSev: transactionDetails.amount * transactionDetails.price,
+                                sevBalance: balance.sevBalance,
+                              });
+                              handlePlaceOrder(transactionDetails.artworkId, transactionDetails.amount, transactionDetails.price, true);
+                            }}
+                            disabled={
+                              !user ||
+                              !isConnected ||
+                              !isTradeAllowed() ||
+                              transactionDetails.amount <= 0 ||
+                              transactionDetails.price <= 0 ||
+                              balance.sevBalance < (transactionDetails.amount * transactionDetails.price)
+                            }
                           >
-                            Buy
+                            Buy ({formatNumber(transactionDetails.amount * transactionDetails.price)} SEV)
                           </button>
                           <button
                             className="sell-button"
-                            onClick={() => handlePlaceOrder(artwork.id, transactionDetails.amount, artwork.currentPrice, false)}
-                            disabled={!user || !isConnected || !isTradeAllowed() || transactionDetails.amount <= 0 || transactionDetails.isBuying || !(artTokenBalances[artwork.id] > 0)}
+                            onClick={() => {
+                              console.log("Attempting to sell:", {
+                                artworkId: transactionDetails.artworkId,
+                                amount: transactionDetails.amount,
+                                price: transactionDetails.price, // Dalam SEV per SEV_TOKEN
+                                artTokenBalance: artTokenBalances[transactionDetails.artworkId],
+                              });
+                              handlePlaceOrder(transactionDetails.artworkId, transactionDetails.amount, transactionDetails.price, false);
+                            }}
+                            disabled={
+                              !user ||
+                              !isConnected ||
+                              !isTradeAllowed() ||
+                              transactionDetails.amount <= 0 ||
+                              transactionDetails.price <= 0 ||
+                              !(artTokenBalances[transactionDetails.artworkId] >= transactionDetails.amount)
+                            }
                           >
-                            Sell
+                            Sell ({formatNumber(transactionDetails.amount * transactionDetails.price)} SEV)
                           </button>
                         </div>
                       </div>
@@ -808,9 +1149,7 @@ function SevraApp({ user, signInWithGoogle, refreshTrigger, setRefreshTrigger })
           </div>
         </div>
       )}
+      {showPopup && <NotificationPopup message={popupMessage} onClose={() => setShowPopup(false)} />}
     </div>
   );
 }
-
-import { useWeb3Modal } from '@web3modal/react';
-import { useAccount } from 'wagmi';

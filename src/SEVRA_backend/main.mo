@@ -7,26 +7,25 @@ import Iter "mo:base/Iter";
 import Array "mo:base/Array";
 import Buffer "mo:base/Buffer";
 import Debug "mo:base/Debug";
+import Nat8 "mo:base/Nat8";
+import Blob "mo:base/Blob";
 import Int "mo:base/Int";
+import Random "mo:base/Random";
 import Order "mo:base/Order";
 
 actor class RWA() {
-    // Token Configuration
     private stable var baseTokenSymbol: Text = "SEV";
-    private stable var baseTokenPrice: Float = 5.0; // USDT
+    private stable var baseTokenPrice: Float = 20.0; // USDT
     
-    // Market Configuration
     private stable var whaleThreshold: Float = 0.25; // 25% of total supply
     private stable var mediumThreshold: Float = 0.10; // 10% of total supply
     private stable var maxWhalePurchase: Float = 0.30; // 30% maximum whale holding
     
-    // Order Types
     private type OrderType = {
         #Buy;
         #Sell;
     };
 
-    // Order Status
     private type OrderStatus = {
         #Open;
         #Partial;
@@ -45,9 +44,9 @@ actor class RWA() {
         totalStages: Nat;
         stageAmount: Float;
         nextStageTime: Time.Time;
+        userType: UserType; // Tambahkan field ini
     };
 
-    // Order Book Entry
     private type Order = {
         id: Text;
         user: Text;
@@ -72,16 +71,13 @@ actor class RWA() {
         filledAmount: Float;
     };
 
-    // Trading Windows (in hours from day start, UTC)
     private let tradingWindows: [[Nat]] = [
-    [1, 3],   // Morning window: 01:00-03:00 GMT (08:00-10:00 WIB)
-    [5, 7],   // Afternoon window: 05:00-09:00 GMT (12:00-14:00 WIB)
-    [10, 14], // Evening window: 10:00-12:00 GMT (17:00-19:00 WIB)
-    [15, 17]  // Night window: 15:00-17:00 GMT (22:00-00:00 WIB)
+        [1, 3],   // Morning window: 01:00-03:00 GMT (08:00-10:00 WIB)
+        [5, 7],   // Afternoon window: 05:00-09:00 GMT (12:00-14:00 WIB)
+        [10, 12], // Evening window: 10:00-12:00 GMT (17:00-19:00 WIB)
+        [13, 17]  // Night window: 15:00-17:00 GMT (22:00-00:00 WIB)
     ];
 
-
-    // Price Appreciation Rates (in percentages)
     private type AppreciationRates = {
         hourly: Float;
         daily: Float;
@@ -90,7 +86,6 @@ actor class RWA() {
         yearly: Float;
     };
 
-    // Artwork Configuration
     private type Artwork = {
         id: Text;
         name: Text;
@@ -106,13 +101,13 @@ actor class RWA() {
         status: Text;
     };
 
-    // Tokenomics
     private type Tokenomics = {
         var circulatingSupply: Float;
         var burnedSupply: Float;
         var marketCap: Float;
         var volume24h: Float;
         var totalValueLocked: Float;
+        var priceChangeHistory: Buffer.Buffer<Float>;
     };
 
     private type TokenomicsView = {
@@ -121,9 +116,14 @@ actor class RWA() {
         marketCap: Float;
         volume24h: Float;
         totalValueLocked: Float;
+        whale: Float;
+        medium: Float;
+        retail: Float;
+        developer: Float;
+        burned: Float;
+        priceChangeHistory: [Float]; // Tambah ini
     };
 
-    // User Types
     private type UserType = {
         #Whale;
         #Medium;
@@ -146,8 +146,8 @@ actor class RWA() {
         lastLogin: Time.Time;
     };
 
-    // State Variables
     private var userBalances = HashMap.HashMap<Text, UserBalance>(10, Text.equal, Text.hash);
+    private var baseRanging: HashMap.HashMap<Text, Float> = HashMap.HashMap<Text, Float>(10, Text.equal, Text.hash);
     private var stagedOrders = HashMap.HashMap<Text, StagedOrder>(10, Text.equal, Text.hash);
     private var orderBooks = HashMap.HashMap<Text, Buffer.Buffer<Order>>(10, Text.equal, Text.hash);
     private var tokenomics = HashMap.HashMap<Text, Tokenomics>(10, Text.equal, Text.hash);
@@ -161,8 +161,15 @@ actor class RWA() {
         lastLogin: Int;
     })] = [];
 
+    // Helper function to round a Float to 1 decimal place
+    private func roundFloat(x: Float, decimals: Nat): Float {
+        let factor = Float.pow(10.0, Float.fromInt(decimals));
+        let scaled = x * factor;
+        let rounded = if (scaled >= 0.0) { Float.floor(scaled + 0.5) } else { Float.ceil(scaled - 0.5) };
+        rounded / factor
+    };
+
     system func preupgrade() {
-        // Convert HashMap to stable array
         let tempEntries = Buffer.Buffer<(Text, {
             usdtBalance: Float;
             sevBalance: Float;
@@ -188,7 +195,6 @@ actor class RWA() {
     };
 
     system func postupgrade() {
-        // Convert stable array back to HashMap
         userBalances := HashMap.HashMap<Text, UserBalance>(10, Text.equal, Text.hash);
         
         for ((userId, stableBalance) in userBalancesStable.vals()) {
@@ -203,7 +209,6 @@ actor class RWA() {
                 var lastLogin = stableBalance.lastLogin;
             };
             
-            // Add orders to the buffer
             for (order in stableBalance.orders.vals()) {
                 newUserBalance.orders.add(order);
             };
@@ -211,16 +216,14 @@ actor class RWA() {
             userBalances.put(userId, newUserBalance);
         };
         
-        // Clear stable storage after upgrade
         userBalancesStable := [];
     };
         
     private type MinimumReturn = {
-    artworkId: Text;
-    minReturnPercentage: Float;
+        artworkId: Text;
+        minReturnPercentage: Float;
     };
 
-    // Tambahkan variable untuk minimum returns
     private let minimumReturns: [MinimumReturn] = [
         { artworkId = "UTD"; minReturnPercentage = 15.38 },
         { artworkId = "ORY"; minReturnPercentage = 16.67 },
@@ -229,10 +232,8 @@ actor class RWA() {
         { artworkId = "LFA"; minReturnPercentage = 13.64 }
     ];
 
-    // Tambahkan variable untuk tracking periode check
     private stable var lastReturnCheckTime = Time.now();
 
-    // Helper Functions
     private func getCurrentHour() : Nat {
         let currentTime = Time.now();
         let hoursFromEpoch = Int.abs(currentTime) / (3600 * 1000000000);
@@ -243,7 +244,6 @@ actor class RWA() {
         let currentHour = getCurrentHour();
         for (window in tradingWindows.vals()) {
             if (window[0] > window[1]) {
-                // Handle windows that wrap around midnight
                 if (currentHour >= window[0] or currentHour < window[1]) {
                     return true;
                 };
@@ -253,8 +253,7 @@ actor class RWA() {
         };
         false
     };
-    
-    // Sorting function for orders
+
     private func sortOrders(orders: [Order]) : [Order] {
         Array.sort<Order>(orders, func(a: Order, b: Order) : Order.Order {
             if (a.price < b.price) { #less }
@@ -263,7 +262,6 @@ actor class RWA() {
         })
     };
 
-    // Convert Buffer to Array helper
     private func convertBufferToArray<T>(buffer: Buffer.Buffer<T>) : [T] {
         Buffer.toArray(buffer)
     };
@@ -274,10 +272,10 @@ actor class RWA() {
             name = "Untitled";
             artist = "Jean-Michel Basquiat";
             symbol = "SEV_UTD";
-            totalSupply = 1_000_000;
-            developerSupply = 500_000;
-            currentPrice = 7_500_000.0; // Divided by 20 from 150_000_000.0
-            lastPrice = 6_500_000.0; // Divided by 20 from 130_000_000.0
+            totalSupply = 375_000;
+            developerSupply = 187_500;
+            currentPrice = 7_500_000.0;
+            lastPrice = 6_500_000.0;
             description = "Iconic painting known for graffiti and expressionist style";
             lastSaleDate = 1495584000000000000; // May 2017
             appreciationRates = {
@@ -294,10 +292,10 @@ actor class RWA() {
             name = "Orange, Red, Yellow";
             artist = "Mark Rothko";
             symbol = "SEV_ORY";
-            totalSupply = 800_000;
-            developerSupply = 400_000;
-            currentPrice = 7_000_000.0; // Divided by 20 from 140_000_000.0
-            lastPrice = 6_000_000.0; // Divided by 20 from 120_000_000.0
+            totalSupply = 350_000;
+            developerSupply = 175_000;
+            currentPrice = 7_000_000.0;
+            lastPrice = 6_000_000.0;
             description = "Abstract expressionist painting with large emotional color fields";
             lastSaleDate = 1336723200000000000; // May 2012
             appreciationRates = {
@@ -314,10 +312,10 @@ actor class RWA() {
             name = "Balloon Dog (Orange)";
             artist = "Jeff Koons";
             symbol = "SEV_BDO";
-            totalSupply = 600_000;
-            developerSupply = 300_000;
-            currentPrice = 5_000_000.0; // Divided by 20 from 100_000_000.0
-            lastPrice = 4_000_000.0; // Divided by 20 from 80_000_000.0
+            totalSupply = 250_000;
+            developerSupply = 125_000;
+            currentPrice = 5_000_000.0;
+            lastPrice = 4_000_000.0;
             description = "Iconic stainless steel sculpture of a balloon dog";
             lastSaleDate = 1384214400000000000; // Nov 2013
             appreciationRates = {
@@ -334,10 +332,10 @@ actor class RWA() {
             name = "No. 5, 1948";
             artist = "Jackson Pollock";
             symbol = "SEV_POL";
-            totalSupply = 500_000;
-            developerSupply = 250_000;
-            currentPrice = 12_500_000.0; // Divided by 20 from 250_000_000.0
-            lastPrice = 10_000_000.0; // Divided by 20 from 200_000_000.0
+            totalSupply = 625_000;
+            developerSupply = 312_500;
+            currentPrice = 12_500_000.0;
+            lastPrice = 10_000_000.0;
             description = "Famous abstract expressionist action painting";
             lastSaleDate = 1162944000000000000; // Nov 2006
             appreciationRates = {
@@ -354,10 +352,10 @@ actor class RWA() {
             name = "Les Femmes d'Alger (Version O)";
             artist = "Pablo Picasso";
             symbol = "SEV_LFA";
-            totalSupply = 400_000;
-            developerSupply = 200_000;
-            currentPrice = 12_500_000.0; // Divided by 20 from 250_000_000.0
-            lastPrice = 11_000_000.0; // Divided by 20 from 220_000_000.0
+            totalSupply = 500_000;
+            developerSupply = 250_000;
+            currentPrice = 12_500_000.0;
+            lastPrice = 11_000_000.0;
             description = "Part of Picasso's series inspired by Orientalist art";
             lastSaleDate = 1431475200000000000; // May 2015
             appreciationRates = {
@@ -371,33 +369,31 @@ actor class RWA() {
         }
     ];
 
-
-    // Initialize order books and tokenomics for each artwork
     private func initializeArtwork() {
         for (artwork in artworks.vals()) {
             let orders = Buffer.Buffer<Order>(100);
             orderBooks.put(artwork.id, orders);
-            Debug.print("Initialized order book for " # artwork.id # ": " # debug_show(Buffer.toArray(orders)));
-            
-            let initialTokenomics : Tokenomics = {
-                var circulatingSupply = Float.fromInt(artwork.totalSupply - artwork.developerSupply);
+
+            let initialCirculating = Float.fromInt(artwork.totalSupply) / 2.0;
+            let initialTokenomics: Tokenomics = {
+                var circulatingSupply = initialCirculating;
                 var burnedSupply = 0.0;
-                var marketCap = Float.fromInt(artwork.totalSupply) * artwork.currentPrice;
+                var marketCap = initialCirculating * artwork.currentPrice;
                 var volume24h = 0.0;
                 var totalValueLocked = Float.fromInt(artwork.developerSupply) * artwork.currentPrice;
+                var priceChangeHistory = Buffer.Buffer<Float>(10); // Tambah ini
             };
             tokenomics.put(artwork.id, initialTokenomics);
-        };
+        }
     };
 
-    // Initialize system
     initializeArtwork();
 
     private func getUserType(amount: Float, artworkId: Text) : UserType {
         let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a: Artwork) : Bool { a.id == artworkId });
         switch (artwork) {
             case (?art) {
-                let percentage = amount / Float.fromInt(art.totalSupply);
+                let percentage = amount / Float.fromInt(art.totalSupply); // Langsung dari Nat ke Float
                 if (percentage > whaleThreshold) { #Whale }
                 else if (percentage > mediumThreshold) { #Medium }
                 else { #Retail }
@@ -406,139 +402,192 @@ actor class RWA() {
         }
     };
 
-    // Price Update Functions
-    private func updatePrices() {
-        let currentTime = Time.now();
-        let hoursPassed = Float.fromInt(Int.abs(currentTime - lastPriceUpdate)) / (3600.0 * 1000000000.0);
-        
-        for (i in Iter.range(0, artworks.size() - 1)) {
-            let artwork = artworks[i];
-            let appreciationRate = artwork.appreciationRates.hourly * hoursPassed;
-            artworks[i] := {
-                artwork with
-                lastPrice = artwork.currentPrice;
-                currentPrice = artwork.currentPrice * (1.0 + appreciationRate);
-            };
-        };
-        
-        lastPriceUpdate := currentTime;
-        
-        // Tambahkan check minimum return dan auto burn
-        checkMinimumReturnAndBurn();
-    };
-
     private func burnTokens(artworkId: Text, amount: Float) {
-        switch (tokenomics.get(artworkId)) {
-            case (?stats) {
-                stats.burnedSupply += amount;
-                stats.circulatingSupply -= amount;
-                
-                let foundArtwork = Array.find<Artwork>(Array.freeze(artworks), func(a: Artwork) : Bool { 
-                    a.id == artworkId 
-                });
-                
-                let price = switch (foundArtwork) {
-                    case (?art) { art.currentPrice };
-                    case null { 0.0 };
+    switch (tokenomics.get(artworkId)) {
+        case (?stats) {
+            let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a: Artwork) : Bool { a.id == artworkId });
+            switch (artwork) {
+                case (?art) {
+                    let totalSupplyFloat = Float.fromInt(art.totalSupply); // Nat -> Float langsung
+                    let maxBurnable = totalSupplyFloat * 0.5; // Maksimal burn 50% dari total supply
+                    if (stats.burnedSupply + amount > maxBurnable) {
+                        return;
+                    };
+                    let roundedAmount = roundFloat(amount, 1);
+                    stats.burnedSupply += roundedAmount;
+
+                    let burnAmountInt = Float.toInt(roundedAmount); // Float -> Int
+                    let burnAmountNat = Int.abs(burnAmountInt); // Int -> Nat pake Int.abs
+
+                    let index = Array.indexOf<Artwork>(art, Array.freeze(artworks), func(a: Artwork, b: Artwork) : Bool { a.id == b.id });
+                    switch (index) {
+                        case (?idx) {
+                            artworks[idx] := {
+                                id = art.id;
+                                name = art.name;
+                                artist = art.artist;
+                                symbol = art.symbol;
+                                totalSupply = Nat.sub(art.totalSupply, burnAmountNat);
+                                developerSupply = art.developerSupply;
+                                currentPrice = art.currentPrice;
+                                lastPrice = art.lastPrice;
+                                description = art.description;
+                                lastSaleDate = art.lastSaleDate;
+                                appreciationRates = art.appreciationRates;
+                                status = art.status;
+                            };
+                            stats.marketCap := roundFloat(stats.circulatingSupply * art.currentPrice, 1);
+                            stats.totalValueLocked := roundFloat(Float.fromInt(art.developerSupply) * art.currentPrice, 1);
+
+                            let initialTotalSupply = totalSupplyFloat / 2.0;
+                            let currentSupply = (totalSupplyFloat - stats.burnedSupply);
+                            let priceIncreaseFactor = initialTotalSupply / currentSupply;
+                            artworks[idx] := {
+                                id = art.id;
+                                name = art.name;
+                                artist = art.artist;
+                                symbol = art.symbol;
+                                totalSupply = Nat.sub(art.totalSupply, burnAmountNat);
+                                developerSupply = art.developerSupply;
+                                currentPrice = roundFloat(art.currentPrice * priceIncreaseFactor, 1);
+                                lastPrice = art.lastPrice;
+                                description = art.description;
+                                lastSaleDate = art.lastSaleDate;
+                                appreciationRates = art.appreciationRates;
+                                status = art.status;
+                            };
+                        };
+                        case null {
+                            Debug.print("Artwork index not found for ID: " # artworkId);
+                        };
+                    };
                 };
-                
-                stats.marketCap := stats.circulatingSupply * price;
-                
-                // Tangani optional foundArtwork untuk developerSupply
-                let developerSupply = switch (foundArtwork) {
-                    case (?art) { art.developerSupply };
-                    case null { 0 };
+                case null {
+                    Debug.print("Artwork not found for ID: " # artworkId);
                 };
-                stats.totalValueLocked := Float.fromInt(developerSupply) * price;
             };
-            case null {};
+        };
+        case null {
+            Debug.print("Tokenomics not found for ID: " # artworkId);
         };
     };
+};
 
     private func checkMinimumReturnAndBurn() {
-        let currentTime = Time.now();
-        let monthInNs = 30.44 * 24.0 * 3600.0 * 1000000000.0; // Rata-rata 1 bulan (30.44 hari)
-        
-        if (Float.fromInt(Int.abs(currentTime - lastReturnCheckTime)) >= monthInNs) {
-            for (minReturn in minimumReturns.vals()) {
-                let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a: Artwork) : Bool { 
-                    a.id == minReturn.artworkId 
-                });
-                
-                switch (artwork) {
-                    case (?art) {
-                        // Hitung actual return bulanan (tahunan dibagi 12)
-                        let timeSinceLastPrice = Float.fromInt(Int.abs(currentTime - lastPriceUpdate)) / (365.0 * 24.0 * 3600.0 * 1000000000.0); // Dalam tahun
-                        let actualReturnAnnual = ((art.currentPrice - art.lastPrice) / art.lastPrice) * (1.0 / timeSinceLastPrice) * 100.0;
-                        let actualReturnMonthly = actualReturnAnnual / 12.0;
-                        let minReturnMonthly = minReturn.minReturnPercentage / 12.0;
-                        
-                        // Jika return bulanan lebih rendah dari minimum
-                        if (actualReturnMonthly < minReturnMonthly) {
-                            let returnGap = minReturnMonthly - actualReturnMonthly;
-                            switch (tokenomics.get(art.id)) {
-                                case (?stats) {
-                                    let burnPercentage = returnGap * 0.05; // 5% burn per 1% gap
-                                    let burnAmount = stats.circulatingSupply * (burnPercentage / 100.0);
-                                    
+    let currentTime = Time.now();
+    let dayInNs = 24.0 * 3600.0 * 1000000000.0;
+
+    if (Float.fromInt(Int.abs(currentTime - lastReturnCheckTime)) >= dayInNs) {
+        for (minReturn in minimumReturns.vals()) {
+            let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a) { a.id == minReturn.artworkId });
+            switch (artwork) {
+                case (?art) {
+                    let dailyReturnTarget = minReturn.minReturnPercentage / 365.0; // Target harian
+                    let actualReturnDaily = ((art.currentPrice - art.lastPrice) / art.lastPrice) * 100.0;
+                    if (actualReturnDaily < dailyReturnTarget) {
+                        let returnGap = dailyReturnTarget - actualReturnDaily;
+                        switch (tokenomics.get(art.id)) {
+                            case (?stats) {
+                                let burnPercentage = returnGap * 0.05;
+                                let burnAmount = roundFloat(stats.circulatingSupply * (burnPercentage / 100.0), 1);
+                                let maxBurnable = Float.fromInt(art.totalSupply) * 0.5;
+                                if (stats.burnedSupply + burnAmount <= maxBurnable) {
                                     burnTokens(art.id, burnAmount);
-                                    
-                                    let priceIncrease = returnGap / 100.0;
+                                    let priceIncreaseFactor = 1.0 + (returnGap / 100.0);
+                                    let newPrice = roundFloat(art.currentPrice * priceIncreaseFactor, 1);
+                                    let priceChangePercent = ((newPrice - art.currentPrice) / art.currentPrice) * 100;
+
                                     for (i in Iter.range(0, artworks.size() - 1)) {
                                         if (artworks[i].id == art.id) {
                                             artworks[i] := {
                                                 artworks[i] with
-                                                currentPrice = art.currentPrice * (1.0 + priceIncrease)
+                                                currentPrice = newPrice
                                             };
                                         };
                                     };
-                                    
-                                    Debug.print("Monthly auto-burn for " # art.id);
-                                    Debug.print("Burned amount: " # Float.toText(burnAmount));
-                                    Debug.print("New price: " # Float.toText(art.currentPrice * (1.0 + priceIncrease)));
+                                    stats.marketCap := roundFloat(stats.circulatingSupply * newPrice, 1);
+                                    stats.priceChangeHistory.add(priceChangePercent); // Tambah ke history
+                                    if (stats.priceChangeHistory.size() > 10) {
+                                        ignore stats.priceChangeHistory.remove(0); // Ganti removeAt jadi remove
+                                    };
                                 };
-                                case null {};
                             };
+                            case null {};
                         };
                     };
-                    case null {};
                 };
+                case null {};
             };
-            lastReturnCheckTime := currentTime;
         };
+        lastReturnCheckTime := currentTime;
+    };
+};
+
+    private func updatePrices() {
+        let currentTime = Time.now();
+        let hoursPassed = Float.fromInt(Int.abs(currentTime - lastPriceUpdate)) / (3600.0 * 1000000000.0);
+        if (hoursPassed < 1.0) { return; }; // Update setiap jam
+
+        for (i in Iter.range(0, artworks.size() - 1)) {
+            let artwork = artworks[i];
+            let lastChange = (artwork.currentPrice - artwork.lastPrice) / artwork.lastPrice; // Persentase kenaikan terakhir
+            let rangeMin = lastChange - 0.0001; // -0.01%
+            let rangeMax = lastChange + 0.0001; // +0.01%
+            let fluctuation = rangeMin + (getRandomRange() * (rangeMax - rangeMin)); // Ranging di sekitar kenaikan
+            let newPrice = roundFloat(artwork.currentPrice * (1.0 + fluctuation), 1);
+
+            artworks[i] := {
+                artwork with
+                lastPrice = artwork.currentPrice;
+                currentPrice = newPrice;
+            };
+        };
+        lastPriceUpdate := currentTime;
+        checkMinimumReturnAndBurn();
     };
 
+    private func getRandomRange() : Float {
+        let seed = Int.abs(Time.now());
+        let pseudoRandom = Float.fromInt(seed % 100) / 100.0; // 0.0 - 1.0
+        pseudoRandom
+    };
 
     private func updateUserBalances(buyer: Text, seller: Text, artworkId: Text, amount: Float, price: Float) {
         switch (userBalances.get(buyer), userBalances.get(seller)) {
             case (?buyerBalance, ?sellerBalance) {
-                let totalCost = amount * price;
-                
+                let totalCost = roundFloat(amount * price, 1);
+
                 buyerBalance.sevBalance -= totalCost;
                 switch (buyerBalance.artTokens.get(artworkId)) {
-                    case (?existing) { buyerBalance.artTokens.put(artworkId, existing + amount); };
-                    case null { buyerBalance.artTokens.put(artworkId, amount); };
+                    case (?existing) { buyerBalance.artTokens.put(artworkId, roundFloat(existing + amount, 1)); };
+                    case null { buyerBalance.artTokens.put(artworkId, roundFloat(amount, 1)); };
                 };
-                
+
                 sellerBalance.sevBalance += totalCost;
                 switch (sellerBalance.artTokens.get(artworkId)) {
-                    case (?existing) { 
+                    case (?existing) {
                         if (existing >= amount) {
-                            sellerBalance.artTokens.put(artworkId, existing - amount);
+                            sellerBalance.artTokens.put(artworkId, roundFloat(existing - amount, 1));
                         };
                     };
                     case null {};
                 };
-                
-                // Update tokenomics secara real-time
+
                 switch (tokenomics.get(artworkId)) {
                     case (?stats) {
-                        stats.volume24h += totalCost;
                         let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a) { a.id == artworkId });
                         switch (artwork) {
                             case (?art) {
-                                stats.marketCap := stats.circulatingSupply * art.currentPrice;
-                                stats.totalValueLocked := Float.fromInt(art.developerSupply) * art.currentPrice;
+                                stats.circulatingSupply := 0.0;
+                                for ((_, userBalance) in userBalances.entries()) {
+                                    switch (userBalance.artTokens.get(artworkId)) {
+                                        case (?holding) { stats.circulatingSupply += roundFloat(holding, 1); };
+                                        case null {};
+                                    };
+                                };
+                                stats.marketCap := roundFloat(stats.circulatingSupply * art.currentPrice, 1);
+                                stats.totalValueLocked := roundFloat(Float.fromInt(art.developerSupply) * art.currentPrice, 1);
+                                stats.volume24h += roundFloat(totalCost, 1);
                             };
                             case null {};
                         };
@@ -550,7 +599,6 @@ actor class RWA() {
         };
     };
 
-    // Public Functions
     public shared func initializeUser(userId: Text) : async {
         ok: Bool;
         err: ?Text;
@@ -561,7 +609,6 @@ actor class RWA() {
                 { ok = true; err = null }
             };
             case null {
-                // Buat data baru kalau pengguna belum ada
                 let newBalance = {
                     var usdtBalance = 0.0;
                     var sevBalance = 0.0;
@@ -583,15 +630,20 @@ actor class RWA() {
             return { ok = false; err = ?"Jumlah tidak valid" };
         };
 
+        let roundedAmount = roundFloat(amount, 1);
+        if (roundedAmount > 1000000.0) {
+            return { ok = false; err = ?"Top-up amount exceeds maximum limit of 1,000,000 USDT" };
+        };
+
         switch (userBalances.get(userId)) {
             case (?balance) {
-                balance.usdtBalance += amount;
+                balance.usdtBalance += roundedAmount;
                 balance.lastLogin := Time.now();
                 { ok = true; err = null }
             };
             case null {
                 let newBalance = {
-                    var usdtBalance = amount;
+                    var usdtBalance = roundedAmount;
                     var sevBalance = 0.0;
                     var artTokens = HashMap.HashMap<Text, Float>(5, Text.equal, Text.hash);
                     var orders = Buffer.Buffer<Order>(50);
@@ -607,7 +659,6 @@ actor class RWA() {
         ok: Bool;
         err: ?Text;
     } {
-
         switch (userBalances.get(user)) {
             case (?balance) {
                 if (balance.usdtBalance < amount) {
@@ -635,7 +686,7 @@ actor class RWA() {
 
     switch (userBalances.get(user)) {
         case (?balance) {
-            let userType = getUserType(amount, artworkId); // Fixed: Removed 'user' parameter
+            let userType = getUserType(amount, artworkId);
             let totalCost = amount * price;
 
             switch (orderType) {
@@ -683,10 +734,11 @@ actor class RWA() {
                         stage = 0;
                         totalStages = totalStages;
                         stageAmount = stageAmount;
-                        nextStageTime = Time.now();
+                        nextStageTime = Time.now() + 86_400_000_000_000;
+                        userType = #Whale; // Tambahkan userType
                     };
                     stagedOrders.put(user # artworkId, stagedOrder);
-                    
+
                     label whaleLoop
                     for (i in Iter.range(0, totalStages - 1)) {
                         switch (stagedOrders.get(user # artworkId)) {
@@ -705,32 +757,8 @@ actor class RWA() {
                                     var status = #Open;
                                     var filledAmount = 0.0;
                                 };
-                                Debug.print("Processing stage " # Nat.toText(i + 1) # " for Whale " # user # " - Amount: " # Float.toText(currentOrder.stageAmount));
-                                switch (orderType) {
-                                    case (#Buy) {
-                                        let subCost = currentOrder.stageAmount * price;
-                                        balance.sevBalance -= subCost;
-                                        let newAmount = if (currentOrder.stageAmount < 0.000001) { Float.max(currentOrder.stageAmount, 0.000001) } else { currentOrder.stageAmount };
-                                        switch (balance.artTokens.get(artworkId)) {
-                                            case (?existing) { balance.artTokens.put(artworkId, existing + newAmount); };
-                                            case null { balance.artTokens.put(artworkId, newAmount); };
-                                        };
-                                        Debug.print("Whale " # user # " bought " # Float.toText(newAmount) # " of " # artworkId # " in stage " # Nat.toText(i + 1));
-                                    };
-                                    case (#Sell) {
-                                        let subCost = currentOrder.stageAmount * price;
-                                        let currentHolding = switch (balance.artTokens.get(artworkId)) {
-                                            case (?holding) { holding };
-                                            case null { 0.0 };
-                                        };
-                                        balance.artTokens.put(artworkId, currentHolding - currentOrder.stageAmount);
-                                        balance.sevBalance += subCost;
-                                        Debug.print("Whale " # user # " sold " # Float.toText(currentOrder.stageAmount) # " of " # artworkId # " in stage " # Nat.toText(i + 1));
-                                    };
-                                };
                                 matchOrders(artworkId, order);
 
-                                // Update staged order
                                 let updatedOrder = {
                                     user = currentOrder.user;
                                     artworkId = currentOrder.artworkId;
@@ -741,16 +769,14 @@ actor class RWA() {
                                     stage = currentOrder.stage + 1;
                                     totalStages = currentOrder.totalStages;
                                     stageAmount = currentOrder.stageAmount;
-                                    nextStageTime = Time.now() + 86_400_000_000_000; // 5 detik ke depan
+                                    nextStageTime = Time.now() + 86_400_000_000_000;
+                                    userType = currentOrder.userType;
                                 };
                                 stagedOrders.put(user # artworkId, updatedOrder);
 
-                                // Simulasi penundaan 5 detik
-                                let delayNs = 86_400_000_000_000; // 5 detik
+                                let delayNs = 86_400_000_000_000;
                                 let startTime = Time.now();
-                                while (Time.now() - startTime < delayNs) {
-                                    // Busy wait untuk simulasi delay
-                                };
+                                while (Time.now() - startTime < delayNs) {};
                             };
                             case null { return { ok = false; err = ?"Staged order not found" }; };
                         };
@@ -784,7 +810,8 @@ actor class RWA() {
                         stage = 0;
                         totalStages = totalStages;
                         stageAmount = stageAmount;
-                        nextStageTime = Time.now();
+                        nextStageTime = Time.now() + 86_400_000_000_000;
+                        userType = #Medium; // Tambahkan userType
                     };
                     stagedOrders.put(user # artworkId, stagedOrder);
 
@@ -806,32 +833,8 @@ actor class RWA() {
                                     var status = #Open;
                                     var filledAmount = 0.0;
                                 };
-                                Debug.print("Processing stage " # Nat.toText(i + 1) # " for Medium " # user # " - Amount: " # Float.toText(currentOrder.stageAmount));
-                                switch (orderType) {
-                                    case (#Buy) {
-                                        let subCost = currentOrder.stageAmount * price;
-                                        balance.sevBalance -= subCost;
-                                        let newAmount = if (currentOrder.stageAmount < 0.000001) { Float.max(currentOrder.stageAmount, 0.000001) } else { currentOrder.stageAmount };
-                                        switch (balance.artTokens.get(artworkId)) {
-                                            case (?existing) { balance.artTokens.put(artworkId, existing + newAmount); };
-                                            case null { balance.artTokens.put(artworkId, newAmount); };
-                                        };
-                                        Debug.print("Medium " # user # " bought " # Float.toText(newAmount) # " of " # artworkId # " in stage " # Nat.toText(i + 1));
-                                    };
-                                    case (#Sell) {
-                                        let subCost = currentOrder.stageAmount * price;
-                                        let currentHolding = switch (balance.artTokens.get(artworkId)) {
-                                            case (?holding) { holding };
-                                            case null { 0.0 };
-                                        };
-                                        balance.artTokens.put(artworkId, currentHolding - currentOrder.stageAmount);
-                                        balance.sevBalance += subCost;
-                                        Debug.print("Medium " # user # " sold " # Float.toText(currentOrder.stageAmount) # " of " # artworkId # " in stage " # Nat.toText(i + 1));
-                                    };
-                                };
                                 matchOrders(artworkId, order);
 
-                                // Update staged order
                                 let updatedOrder = {
                                     user = currentOrder.user;
                                     artworkId = currentOrder.artworkId;
@@ -842,16 +845,14 @@ actor class RWA() {
                                     stage = currentOrder.stage + 1;
                                     totalStages = currentOrder.totalStages;
                                     stageAmount = currentOrder.stageAmount;
-                                    nextStageTime = Time.now() + 86_400_000_000_000; // 5 detik ke depan
+                                    nextStageTime = Time.now() + 86_400_000_000_000;
+                                    userType = currentOrder.userType;
                                 };
                                 stagedOrders.put(user # artworkId, updatedOrder);
 
-                                // Simulasi penundaan 5 detik
-                                let delayNs = 86_400_000_000_000; // 5 detik
+                                let delayNs = 86_400_000_000_000;
                                 let startTime = Time.now();
-                                while (Time.now() - startTime < delayNs) {
-                                    // Busy wait untuk simulasi delay
-                                };
+                                while (Time.now() - startTime < delayNs) {};
                             };
                             case null { return { ok = false; err = ?"Staged order not found" }; };
                         };
@@ -870,28 +871,6 @@ actor class RWA() {
                         var status = #Open;
                         var filledAmount = 0.0;
                     };
-                    Debug.print("Before buy - sevBalance: " # Float.toText(balance.sevBalance) # ", artTokens: " # debug_show(Iter.toArray(balance.artTokens.entries())));
-                    switch (orderType) {
-                        case (#Buy) {
-                            balance.sevBalance -= totalCost;
-                            let newAmount = if (amount < 0.000001) { Float.max(amount, 0.000001) } else { amount };
-                            switch (balance.artTokens.get(artworkId)) {
-                                case (?existing) { balance.artTokens.put(artworkId, existing + newAmount); };
-                                case null { balance.artTokens.put(artworkId, newAmount); };
-                            };
-                            Debug.print("Retail " # user # " bought " # Float.toText(newAmount) # " of " # artworkId);
-                        };
-                        case (#Sell) {
-                            let currentHolding = switch (balance.artTokens.get(artworkId)) {
-                                case (?holding) { holding };
-                                case null { 0.0 };
-                            };
-                            balance.artTokens.put(artworkId, currentHolding - amount);
-                            balance.sevBalance += totalCost;
-                            Debug.print("Retail " # user # " sold " # Float.toText(amount) # " of " # artworkId);
-                        };
-                    };
-                    Debug.print("After buy - sevBalance: " # Float.toText(balance.sevBalance) # ", artTokens: " # debug_show(Iter.toArray(balance.artTokens.entries())));
                     matchOrders(artworkId, order);
                 };
             };
@@ -899,6 +878,98 @@ actor class RWA() {
         };
         case null { { ok = false; err = ?"User not found" } };
     }
+};
+
+private func matchOrders(artworkId: Text, newOrder: Order) {
+    switch (orderBooks.get(artworkId)) {
+        case (?book) {
+            book.add(newOrder);
+            let orders = Buffer.toArray(book);
+            let sortedOrders = sortOrders(orders);
+            var totalVolume = 0.0;
+            var totalCost = 0.0;
+
+            for (order in sortedOrders.vals()) {
+                if (order.id != newOrder.id and order.status != #Filled and order.status != #Cancelled) {
+                    if (newOrder.orderType == #Buy and order.orderType == #Sell and newOrder.price >= order.price) {
+                        let matchAmount = Float.min(newOrder.amount - newOrder.filledAmount, order.amount - order.filledAmount);
+                        if (matchAmount > 0) {
+                            newOrder.filledAmount += matchAmount;
+                            order.filledAmount += matchAmount;
+                            updateUserBalances(newOrder.user, order.user, artworkId, matchAmount, order.price);
+                            totalVolume += matchAmount;
+                            totalCost += matchAmount * order.price;
+
+                            if (newOrder.filledAmount >= newOrder.amount) { newOrder.status := #Filled; }
+                            else { newOrder.status := #Partial; };
+                            if (order.filledAmount >= order.amount) { order.status := #Filled; }
+                            else { order.status := #Partial; };
+                        };
+                    } else if (newOrder.orderType == #Sell and order.orderType == #Buy and newOrder.price <= order.price) {
+                        let matchAmount = Float.min(newOrder.amount - newOrder.filledAmount, order.amount - order.filledAmount);
+                        if (matchAmount > 0) {
+                            newOrder.filledAmount += matchAmount;
+                            order.filledAmount += matchAmount;
+                            updateUserBalances(order.user, newOrder.user, artworkId, matchAmount, order.price);
+                            totalVolume += matchAmount;
+                            totalCost += matchAmount * order.price;
+
+                            if (newOrder.filledAmount >= newOrder.amount) { newOrder.status := #Filled; }
+                            else { newOrder.status := #Partial; };
+                            if (order.filledAmount >= order.amount) { order.status := #Filled; }
+                            else { order.status := #Partial; };
+                        };
+                    };
+                };
+            };
+
+            if (totalVolume > 0) {
+                let avgPrice = roundFloat(totalCost / totalVolume, 1);
+                let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a) { a.id == artworkId });
+                switch (artwork, tokenomics.get(artworkId)) {
+                    case (?art, ?stats) {
+                        let supplyImpact = newOrder.amount / Float.fromInt(art.totalSupply);
+                        let priceChangeFactor = if (newOrder.orderType == #Buy) { 
+                            1.0 + (supplyImpact * 100.0) 
+                        } else { 
+                            1.0 - (supplyImpact * 100.0) 
+                        };
+                        let newPrice = roundFloat(art.currentPrice * priceChangeFactor, 1);
+                        let priceChangePercent = ((newPrice - art.currentPrice) / art.currentPrice) * 100; // Hitung perubahan
+
+                        for (i in Iter.range(0, artworks.size() - 1)) {
+                            if (artworks[i].id == artworkId) {
+                                artworks[i] := {
+                                    artworks[i] with
+                                    lastPrice = art.currentPrice;
+                                    currentPrice = newPrice;
+                                };
+                            };
+                        };
+
+                        if (newOrder.orderType == #Buy) {
+                            stats.circulatingSupply -= roundFloat(totalVolume, 1);
+                        } else {
+                            stats.circulatingSupply += roundFloat(totalVolume, 1);
+                        };
+                        stats.marketCap := roundFloat(stats.circulatingSupply * newPrice, 1);
+                        stats.volume24h += roundFloat(totalCost, 1);
+                        stats.priceChangeHistory.add(priceChangePercent); // Tambah ke history
+                        if (stats.priceChangeHistory.size() > 10) {
+                            ignore stats.priceChangeHistory.remove(0); // Ganti removeAt jadi remove
+                        };
+                    };
+                    case _ {};
+                };
+            };
+            orderBooks.put(artworkId, Buffer.fromArray(sortedOrders));
+        };
+        case null {
+            let newBook = Buffer.Buffer<Order>(100);
+            newBook.add(newOrder);
+            orderBooks.put(artworkId, newBook);
+        };
+    };
 };
 
     public shared func developerBurn(artworkId: Text, amount: Float) : async {
@@ -921,188 +992,16 @@ actor class RWA() {
         }
     };
 
-    // Query Functions
     public query func getArtworks() : async [Artwork] {
         Array.freeze(artworks)
     };
 
-    // Fungsi untuk ambil data pengguna
     public query func getUserBalance(userId: Text) : async ?UserBalanceView {
-    Debug.print("Fetching balance for user: " # userId);
-    switch (userBalances.get(userId)) {
-        case (?balance) {
-        let ordersView = Buffer.Buffer<OrderView>(50);
-        for (order in balance.orders.vals()) {
-            ordersView.add({
-            id = order.id;
-            user = order.user;
-            artworkId = order.artworkId;
-            orderType = order.orderType;
-            amount = order.amount;
-            price = order.price;
-            timestamp = order.timestamp;
-            status = order.status;
-            filledAmount = order.filledAmount;
-            });
-        };
-        let result = ?{
-            usdtBalance = balance.usdtBalance;
-            sevBalance = balance.sevBalance;
-            artTokens = Iter.toArray(balance.artTokens.entries());
-            orders = Buffer.toArray(ordersView);
-            lastLogin = balance.lastLogin;
-        };
-        Debug.print("Returning balance: " # debug_show(result));
-        result
-        };
-        case null {
-        Debug.print("No balance found for user: " # userId);
-        ?{ usdtBalance = 0.0; sevBalance = 0.0; artTokens = []; orders = []; lastLogin = Time.now() } // Default value
-        }
-    }
-    };
-
-    private func matchOrders(artworkId: Text, newOrder: Order) {
-        switch (orderBooks.get(artworkId)) {
-            case (?book) {
-                book.add(newOrder); // Pastikan order baru ditambahkan ke orderBooks
-                let orders = Buffer.toArray(book);
-                let sortedOrders = sortOrders(orders);
-                var totalVolume = 0.0;
-                var totalCost = 0.0;
-                
-                for (order in sortedOrders.vals()) {
-                    if (order.id != newOrder.id and 
-                        order.status != #Filled and 
-                        order.status != #Cancelled) {
-                        
-                        if (newOrder.orderType == #Buy and order.orderType == #Sell and 
-                            newOrder.price >= order.price) {
-                            let matchAmount = Float.min(
-                                newOrder.amount - newOrder.filledAmount,
-                                order.amount - order.filledAmount
-                            );
-                            
-                            if (matchAmount > 0) {
-                                newOrder.filledAmount += matchAmount;
-                                order.filledAmount += matchAmount;
-                                updateUserBalances(newOrder.user, order.user, artworkId, matchAmount, order.price);
-                                totalVolume += matchAmount;
-                                totalCost += matchAmount * order.price;
-                                
-                                if (newOrder.filledAmount >= newOrder.amount) {
-                                    newOrder.status := #Filled;
-                                } else {
-                                    newOrder.status := #Partial;
-                                };
-                                if (order.filledAmount >= order.amount) {
-                                    order.status := #Filled;
-                                } else {
-                                    order.status := #Partial;
-                                };
-                            };
-                        };
-                    };
-                };
-                
-                // Selalu perbarui harga berdasarkan permintaan
-                if (totalVolume > 0 or newOrder.orderType == #Buy or newOrder.orderType == #Sell) {
-                    let avgPrice = if (totalVolume > 0) { totalCost / totalVolume } else { newOrder.price };
-                    label breakLoop for (i in Iter.range(0, artworks.size() - 1)) {
-                        if (artworks[i].id == artworkId) {
-                            let supplyImpact = newOrder.amount / Float.fromInt(artworks[i].totalSupply);
-                            let priceChangeFactor = if (newOrder.orderType == #Buy) { 1.0 + supplyImpact * 0.1 } else { 1.0 - supplyImpact * 0.1 };
-                            let oldPrice = artworks[i].currentPrice;
-                            artworks[i] := {
-                                artworks[i] with
-                                lastPrice = oldPrice;
-                                currentPrice = artworks[i].currentPrice * priceChangeFactor
-                            };
-                            Debug.print("Demand-based price update for " # artworkId # ": " # Float.toText(artworks[i].currentPrice));
-                            break breakLoop;
-                        };
-                    };
-                };
-                
-                // Perbarui tokenomics setelah transaksi
-                switch (tokenomics.get(artworkId)) {
-                    case (?stats) {
-                        let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a) { a.id == artworkId });
-                        switch (artwork) {
-                            case (?art) {
-                                // Hitung ulang circulating supply berdasarkan total kepemilikan user
-                                var newCirculatingSupply: Float = 0.0;
-                                for ((userId, userBalance) in userBalances.entries()) {
-                                    switch (userBalance.artTokens.get(artworkId)) {
-                                        case (?holding) {
-                                            newCirculatingSupply += holding;
-                                        };
-                                        case null {};
-                                    };
-                                };
-                                stats.circulatingSupply := newCirculatingSupply;
-                                stats.marketCap := stats.circulatingSupply * art.currentPrice;
-                                stats.totalValueLocked := Float.fromInt(art.developerSupply) * art.currentPrice;
-                                Debug.print("Updated tokenomics for " # artworkId # ": circulatingSupply=" # Float.toText(stats.circulatingSupply) # ", marketCap=" # Float.toText(stats.marketCap));
-                            };
-                            case null {};
-                        };
-                    };
-                    case null {};
-                };
-            };
-            case null {};
-        };
-    };
-    
-    public query func getTokenomics(artworkId: Text) : async ?{ whale: Float; medium: Float; retail: Float; burned: Float; developer: Float } {
-        switch (orderBooks.get(artworkId), tokenomics.get(artworkId)) {
-            case (?book, ?stats) {
-                var whaleAmount: Float = 0.0;
-                var mediumAmount: Float = 0.0;
-                var retailAmount: Float = 0.0;
-
-                for ((userId, userBalance) in userBalances.entries()) {
-                    switch (userBalance.artTokens.get(artworkId)) {
-                        case (?holding) {
-                            let userType = getUserType(holding, artworkId); // Line 1067: Hapus parameter userId yang berlebih
-                            Debug.print("User " # userId # " holding " # Float.toText(holding) # " of " # artworkId # ", type: " # debug_show(userType));
-                            switch (userType) {
-                                case (#Whale) { whaleAmount += holding; };
-                                case (#Medium) { mediumAmount += holding; };
-                                case (#Retail) { retailAmount += holding; };
-                            };
-                        };
-                        case null {};
-                    };
-                };
-
-                let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a: Artwork) : Bool { a.id == artworkId });
-                switch (artwork) {
-                    case (?art) {
-                        let totalSupply = Float.fromInt(art.totalSupply);
-                        let burned = stats.burnedSupply;
-                        let developer = Float.fromInt(art.developerSupply);
-                        ?{
-                            whale = whaleAmount;
-                            medium = mediumAmount;
-                            retail = retailAmount;
-                            burned = burned;
-                            developer = developer;
-                        }
-                    };
-                    case null { null };
-                };
-            };
-            case _ { null };
-        }
-    };
-
-    public query func getOrderBook(artworkId: Text) : async ?[OrderView] {
-        switch (orderBooks.get(artworkId)) {
-            case (?book) {
-                let ordersView = Buffer.Buffer<OrderView>(book.size());
-                for (order in book.vals()) {
+        Debug.print("Fetching balance for user: " # userId);
+        switch (userBalances.get(userId)) {
+            case (?balance) {
+                let ordersView = Buffer.Buffer<OrderView>(50);
+                for (order in balance.orders.vals()) {
                     ordersView.add({
                         id = order.id;
                         user = order.user;
@@ -1115,11 +1014,88 @@ actor class RWA() {
                         filledAmount = order.filledAmount;
                     });
                 };
+                let result = ?{
+                    usdtBalance = balance.usdtBalance;
+                    sevBalance = balance.sevBalance;
+                    artTokens = Iter.toArray(balance.artTokens.entries());
+                    orders = Buffer.toArray(ordersView);
+                    lastLogin = balance.lastLogin;
+                };
+                Debug.print("Returning balance: " # debug_show(result));
+                result
+            };
+            case null {
+                Debug.print("No balance found for user: " # userId);
+                ?{ usdtBalance = 0.0; sevBalance = 0.0; artTokens = []; orders = []; lastLogin = Time.now() }
+            }
+        }
+    };
+    
+    public query func getOrderBook(artworkId: Text) : async ?[OrderView] {
+        switch (orderBooks.get(artworkId)) {
+            case (?book) {
+                let ordersView = Buffer.Buffer<OrderView>(book.size());
+                for (order in book.vals()) {
+                    if (order.artworkId == artworkId) {
+                        ordersView.add({
+                            id = order.id;
+                            user = order.user;
+                            artworkId = order.artworkId;
+                            orderType = order.orderType;
+                            amount = roundFloat(order.amount, 1);
+                            price = roundFloat(order.price, 1);
+                            timestamp = order.timestamp;
+                            status = order.status;
+                            filledAmount = roundFloat(order.filledAmount, 1);
+                        });
+                    };
+                };
                 ?Buffer.toArray(ordersView)
             };
             case null { null }
         }
     };
+
+    public query func getTokenomics(artworkId: Text) : async ?TokenomicsView {
+    switch (tokenomics.get(artworkId)) {
+        case (?stats) {
+            let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a) { a.id == artworkId });
+            switch (artwork) {
+                case (?art) {
+                    var whale = 0.0;
+                    var medium = 0.0;
+                    var retail = 0.0;
+                    for ((_, userBalance) in userBalances.entries()) {
+                        switch (userBalance.artTokens.get(artworkId)) {
+                            case (?holding) {
+                                let percentage = holding / Float.fromInt(art.totalSupply);
+                                if (percentage > whaleThreshold) { whale += holding; }
+                                else if (percentage > mediumThreshold) { medium += holding; }
+                                else { retail += holding; }
+                            };
+                            case null {};
+                        };
+                    };
+                    ?{
+                        circulatingSupply = stats.circulatingSupply;
+                        burnedSupply = stats.burnedSupply;
+                        marketCap = stats.marketCap;
+                        volume24h = stats.volume24h;
+                        totalValueLocked = stats.totalValueLocked;
+                        whale = whale;
+                        medium = medium;
+                        retail = retail;
+                        developer = Float.fromInt(art.developerSupply);
+                        burned = stats.burnedSupply;
+                        priceChangeHistory = Buffer.toArray(stats.priceChangeHistory);
+                    }
+                };
+                case null { null };
+            };
+        };
+        case null { null };
+    };
+};
 
     public query func getStagedOrders(user: Text, artworkId: Text) : async ?StagedOrder {
         let key = user # artworkId;
@@ -1136,6 +1112,43 @@ actor class RWA() {
         }
     };
 
+    public shared func testBurning(userId: Text, artworkId: Text, amount: Float) : async { ok: Bool; err: ?Text } {
+    // Pastikan amount valid
+    if (amount <= 0.0) {
+        return { ok = false; err = ?"Invalid amount: must be greater than 0" };
+    };
+
+    // Panggil developerBurn dan tangani hasilnya
+    let burnResult = await developerBurn(artworkId, amount);
+    switch (burnResult) {
+        case ({ ok = true; err = null }) {
+            // Burning berhasil, lanjutkan ke update balance
+            switch (userBalances.get(userId)) {
+                case (?balance) {
+                    let sevCost = amount * 20.0; // 1 SEV_UTD = 20 SEV
+                    if (balance.sevBalance < sevCost) {
+                        return { ok = false; err = ?"Insufficient SEV balance to burn" };
+                    };
+                    balance.sevBalance -= sevCost;
+                    userBalances.put(userId, balance); // Update balance
+                    { ok = true; err = null }
+                };
+                case null {
+                    { ok = false; err = ?"User not found" }
+                }
+            }
+        };
+        case ({ ok = false; err = ?errMsg }) {
+            // Burning gagal
+            { ok = false; err = ?("Failed to burn tokens: " # errMsg) }
+        };
+        case (_) {
+            // Kasus lain, misal developerBurn tidak mengembalikan err
+            { ok = false; err = ?"Unexpected error during burning" }
+        }
+    }
+};
+    
     public query func getTradingWindowStatus() : async {
         isOpen: Bool;
         currentWindow: ?[Nat];
@@ -1167,7 +1180,7 @@ actor class RWA() {
             label l for (i in Iter.range(0, tradingWindows.size() - 1)) {
                 let window = tradingWindows[i];
                 if (window[0] > currentHour) {
-                    nextWindow := ?[window[0], window[1]]; // Pastikan dua elemen
+                    nextWindow := ?[window[0], window[1]];
                     foundNext := true;
                     break l;
                 };
@@ -1186,7 +1199,6 @@ actor class RWA() {
         }
     };
     
-    // Price Statistics
     public query func getPriceStats(artworkId: Text) : async ?{
         currentPrice: Float;
         priceChange24h: Float;
@@ -1197,15 +1209,19 @@ actor class RWA() {
         let artwork = Array.find<Artwork>(Array.freeze(artworks), func(a) { a.id == artworkId });
         switch (artwork) {
             case (?art) {
-                ?{
-                    currentPrice = art.currentPrice;
-                    priceChange24h = art.currentPrice * (1.0 + art.appreciationRates.daily) - art.currentPrice;
-                    priceChangeWeek = art.currentPrice * (1.0 + art.appreciationRates.weekly) - art.currentPrice;
-                    priceChangeMonth = art.currentPrice * (1.0 + art.appreciationRates.monthly) - art.currentPrice;
-                    priceChangeYear = art.currentPrice * (1.0 + art.appreciationRates.yearly) - art.currentPrice;
-                }
+                let timeSinceLastSale = Float.fromInt(Int.abs(Time.now() - art.lastSaleDate)) / (24.0 * 3600.0 * 1000000000.0);
+                let actualChange = (art.currentPrice - art.lastPrice) / art.lastPrice * 100.0;
+                return ?{
+                    currentPrice = roundFloat(art.currentPrice, 1);
+                    priceChange24h = if (timeSinceLastSale >= 1.0) { roundFloat(actualChange / timeSinceLastSale, 1) } else { 0.0 };
+                    priceChangeWeek = if (timeSinceLastSale >= 7.0) { roundFloat(actualChange / (timeSinceLastSale / 7.0), 1) } else { 0.0 };
+                    priceChangeMonth = if (timeSinceLastSale >= 30.0) { roundFloat(actualChange / (timeSinceLastSale / 30.0), 1) } else { 0.0 };
+                    priceChangeYear = roundFloat(actualChange, 1);
+                };
             };
-            case null { null }
-        }
-    }
-};
+            case null {
+                return null;
+            };
+        };
+    };
+}

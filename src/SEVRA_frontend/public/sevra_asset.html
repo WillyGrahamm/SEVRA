@@ -12,7 +12,7 @@
 </head>
 <body>
     <nav class="navbar">
-        <a href="webpage.html" class="logo">
+        <a href="sevra_webpage.html" class="logo">
             <img src="Images/logo2.png" alt="Sevra Logo">
             <span>SEVRA</span>
         </a>
@@ -29,8 +29,8 @@
         <section class="introduction" id="home">
             <div class="edge-line left"></div>
             <div class="edge-line right"></div>
-            <div class="video-background">
-                <video autoplay loop muted playsinline>
+            <div class="video-container">
+                <video autoplay loop muted playsinline preload="metadata">
                     <source src="Videos/asset_container1.mp4" type="video/mp4">
                 </video>
             </div>
@@ -45,6 +45,13 @@
         <section class="assets-showcase" id="assets">
             <div class="edge-line left"></div>
             <div class="edge-line right"></div>
+
+            <div class="video-container">
+                <video autoplay loop muted playbackRate="0.7" preload="metadata">
+                    <source src="Videos/asset_container2.mp4" type="video/mp4">
+                </video>
+            </div>
+
             <h2 class="showcase-title">Featured Artworks</h2>
             <div class="artworks">
                 <div class="artwork" data-id="BDO">
@@ -135,12 +142,13 @@
         </section>
     </main>
 
+    <!--Footer Group-->
     <div class="Footer-group">
         <div class="edge-line left"></div>
         <div class="edge-line right"></div>
         <div class="video-container">
-            <video autoplay loop muted playbackRate="0.7">
-                <source src="Videos/stock_Footer.mp4" type="video/mp4">
+            <video autoplay loop muted playbackRate="0.1">
+                <source src="Videos/stock_footer.mp4" type="video/mp4">
             </video>
         </div>
 
@@ -172,6 +180,6 @@
         </footer>
     </div>
 
-    <script src="script2.js"></script>
+    <script src="script2.js" defer></script>
 </body>
 </html>
