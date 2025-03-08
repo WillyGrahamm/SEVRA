@@ -1,4 +1,9 @@
-# SEVRA███████╗███████╗██╗ ██╗██████╗ █████╗ ██╔════╝██╔════╝██║ ██║██╔══██╗██╔══██╗ ███████╗███████╗██║ ██║██████╔╝███████║ ╚════██║╚════██║██║ ██║██╔═══╝ ██╔══██║ ███████║███████║╚██████╔╝██║ ██║ ██║ ╚══════╝╚══════╝ ╚═════╝ ╚═╝ ╚═╝ ╚═╝
+███████╗███████╗██╗ ██╗██████╗ █████╗
+██╔════╝██╔════╝██║ ██║██╔══██╗██╔══██╗
+███████╗███████╗██║ ██║██████╔╝███████║
+╚════██║╚════██║██║ ██║██╔═══╝ ██╔══██║
+███████║███████║╚██████╔╝██║ ██║ ██║
+╚══════╝╚══════╝ ╚═════╝ ╚═╝ ╚═╝ ╚═╝
 
 ## Selamat Datang di Proyek SEVRA!
 Proyek ini dikembangkan untuk berjalan di Internet Computer. Secara default, proyek ini dilengkapi dengan README dan beberapa file template untuk mempermudah siklus pengembangan.
@@ -39,7 +44,7 @@ mkdir -p ~/.vite-certs
 cd ~/.vite-certs
 mkcert -key-file localhost+2-key.pem -cert-file localhost+2.pem localhost 127.0.0.1 ::1
 mkcert -install # Instal CA ke sistem agar browser mempercayai
-cd ~/SEVRA  # Kembali ke direktori proyek
+cd -  # Kembali ke direktori proyek
 ```
 
 ---
