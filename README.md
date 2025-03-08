@@ -1,4 +1,4 @@
-# SEVRA
+# SEVRA███████╗███████╗██╗ ██╗██████╗ █████╗ ██╔════╝██╔════╝██║ ██║██╔══██╗██╔══██╗ ███████╗███████╗██║ ██║██████╔╝███████║ ╚════██║╚════██║██║ ██║██╔═══╝ ██╔══██║ ███████║███████║╚██████╔╝██║ ██║ ██║ ╚══════╝╚══════╝ ╚═════╝ ╚═╝ ╚═╝ ╚═╝
 
 ## Selamat Datang di Proyek SEVRA!
 Proyek ini dikembangkan untuk berjalan di Internet Computer. Secara default, proyek ini dilengkapi dengan README dan beberapa file template untuk mempermudah siklus pengembangan.
