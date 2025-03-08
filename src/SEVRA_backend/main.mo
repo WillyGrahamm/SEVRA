@@ -75,7 +75,7 @@ actor class RWA() {
         [1, 3],   // Morning window: 01:00-03:00 GMT (08:00-10:00 WIB)
         [5, 7],   // Afternoon window: 05:00-09:00 GMT (12:00-14:00 WIB)
         [10, 12], // Evening window: 10:00-12:00 GMT (17:00-19:00 WIB)
-        [13, 17]  // Night window: 15:00-17:00 GMT (22:00-00:00 WIB)
+        [15, 17]  // Night window: 15:00-17:00 GMT (22:00-00:00 WIB)
     ];
 
     private type AppreciationRates = {
