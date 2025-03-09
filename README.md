@@ -13,7 +13,7 @@
 Proyek ini dikembangkan untuk berjalan di Internet Computer. Secara default, proyek ini dilengkapi dengan README dan beberapa file template untuk mempermudah siklus pengembangan.
 
 ---
-
+## Project ini menggunakan DFX Versi 0.24.3 & Node Js Versi 18.20.6
 ## Cara Clone Proyek
 
 ```bash
