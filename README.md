@@ -108,6 +108,7 @@ Install & Jalankan development server:
 
 ```bash
 npm ci
+npm install firebase
 npm run dev
 ```
 
