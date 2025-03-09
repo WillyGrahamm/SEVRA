@@ -75,10 +75,10 @@ Jalankan perintah berikut untuk memulai:
 dfx start --background  # Menjalankan replica di background
 ```
 
-Jika ingin membersihkan semua riwayat sebelum menjalankan ulang:
+ - Jika ingin membersihkan semua riwayat sebelum menjalankan ulang:
 
 ```bash
-dfx start --clean --background
+ - dfx start --clean --background
 ```
 
 Jika menggunakan opsi `--clean`, buat ulang canister:
@@ -146,7 +146,7 @@ Klik dua kali untuk membuka di browser.
 
 Untuk melihat dokumentasi lebih lanjut, bisa mengakses navbar **"About"** atau langsung ke:
 
-- **SEVRA Finance Documentation**
+- **[https://sevra-finance.gitbook.io/sevra_ff/](https://sevra-finance.gitbook.io/sevra_ff/)**
 
 ---
 
